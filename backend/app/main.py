@@ -22,6 +22,7 @@ from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
 from .services.data_imports import import_prop_rows, import_stat_rows
 from .services.draft_board import get_draft_board
+from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
 from .services.league_import import import_sleeper_league, set_my_team
 from .services.player_detail import player_detail, search_players
 from .services.practice_draft import (
@@ -248,6 +249,30 @@ class FantasyHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/draft/board":
             league_id = require_query(query, "league_id")
             return get_draft_board(conn, league_id)
+
+        if method == "GET" and path == "/api/draft/state":
+            league_id = require_query(query, "league_id")
+            return get_draft_state(
+                conn,
+                league_id,
+                position=first(query, "position"),
+                search=first(query, "search"),
+            )
+
+        if method == "POST" and path == "/api/draft/pick":
+            payload = self.read_json()
+            return make_draft_pick(
+                conn,
+                require(payload, "league_id"),
+                require(payload, "player_id"),
+                pick_no=optional_int(payload.get("pick_no")),
+                practice_draft_id=optional_int(payload.get("practice_draft_id")),
+            )
+
+        if method == "DELETE" and path == "/api/draft/pick":
+            league_id = require_query(query, "league_id")
+            pick_no = int(require_query(query, "pick_no"))
+            return remove_draft_pick(conn, league_id, pick_no)
 
         if method == "GET" and path == "/api/draft/availability":
             league_id = require_query(query, "league_id")

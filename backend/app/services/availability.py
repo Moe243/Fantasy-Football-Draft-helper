@@ -42,10 +42,17 @@ def estimate_availability(
 
 
 def drafted_player_ids(conn: sqlite3.Connection, league_id: str) -> set[str]:
-    rows = conn.execute(
-        "SELECT player_id FROM league_draft_picks WHERE league_id = ? AND player_id IS NOT NULL",
-        (league_id,),
-    ).fetchall()
+    draft_id = latest_draft_id(conn, league_id)
+    if draft_id:
+        rows = conn.execute(
+            "SELECT player_id FROM league_draft_picks WHERE league_id = ? AND draft_id = ? AND player_id IS NOT NULL",
+            (league_id, draft_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT player_id FROM league_draft_picks WHERE league_id = ? AND player_id IS NOT NULL",
+            (league_id,),
+        ).fetchall()
     practice = conn.execute(
         """
         SELECT p.player_id
@@ -55,14 +62,22 @@ def drafted_player_ids(conn: sqlite3.Connection, league_id: str) -> set[str]:
         """,
         (league_id,),
     ).fetchall()
-    return {row["player_id"] for row in rows + practice if row["player_id"]}
+    keepers = conn.execute("SELECT player_id FROM keepers").fetchall()
+    return {row["player_id"] for row in rows + practice + keepers if row["player_id"]}
 
 
 def current_pick_no(conn: sqlite3.Connection, league_id: str) -> int:
-    row = conn.execute(
-        "SELECT MAX(pick_no) AS max_pick FROM league_draft_picks WHERE league_id = ?",
-        (league_id,),
-    ).fetchone()
+    draft_id = latest_draft_id(conn, league_id)
+    if draft_id:
+        row = conn.execute(
+            "SELECT MAX(pick_no) AS max_pick FROM league_draft_picks WHERE league_id = ? AND draft_id = ?",
+            (league_id, draft_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT MAX(pick_no) AS max_pick FROM league_draft_picks WHERE league_id = ?",
+            (league_id,),
+        ).fetchone()
     practice = conn.execute(
         "SELECT current_pick FROM practice_drafts WHERE league_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
         (league_id,),
@@ -71,3 +86,11 @@ def current_pick_no(conn: sqlite3.Connection, league_id: str) -> int:
     if practice:
         return max(base, int(practice["current_pick"] or 1))
     return base
+
+
+def latest_draft_id(conn: sqlite3.Connection, league_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT draft_id FROM league_drafts WHERE league_id = ? ORDER BY season DESC, id DESC LIMIT 1",
+        (league_id,),
+    ).fetchone()
+    return row["draft_id"] if row else None

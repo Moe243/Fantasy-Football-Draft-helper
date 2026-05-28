@@ -9,6 +9,7 @@ from backend.app.services import startup
 from backend.app.services.availability import estimate_availability
 from backend.app.services.data_imports import import_prop_rows, import_stat_rows
 from backend.app.services.draft_board import get_draft_board
+from backend.app.services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
 from backend.app.services.league_import import import_sleeper_league, set_my_team
 from backend.app.services.player_detail import player_detail, search_players
 from backend.app.services.practice_draft import simulate_next, start_practice
@@ -227,6 +228,28 @@ class SleeperDraftToolTests(unittest.TestCase):
         simulated = simulate_next(conn, "L1")
         self.assertEqual(simulated["practice"]["current_pick"], 2)
         self.assertEqual(len(simulated["picks"]), 1)
+
+    def test_draft_state_pick_and_remove_updates_board_and_available(self):
+        conn = memory_db()
+        seed_players(conn)
+        seed_rankings(conn)
+        import_sleeper_league(conn, "L1", client=FakeSleeperClient(picks=[]))
+        set_my_team(conn, "L1", 2)
+        start_practice(conn, "L1")
+
+        before = get_draft_state(conn, "L1")
+        self.assertEqual(before["current_pick"], 1)
+        self.assertTrue(before["board"][0]["picks"][0]["is_current_pick"])
+
+        after = make_draft_pick(conn, "L1", "sleeper_111")
+        self.assertEqual(after["current_pick"], 2)
+        self.assertEqual(after["board"][0]["picks"][0]["player"]["full_name"], "Ja'Marr Chase")
+        available_ids = {item["player"]["internal_player_id"] for item in after["best_available"]}
+        self.assertNotIn("sleeper_111", available_ids)
+
+        removed = remove_draft_pick(conn, "L1", 1)
+        self.assertEqual(removed["current_pick"], 1)
+        self.assertIsNone(removed["board"][0]["picks"][0]["player"])
 
     def test_player_search_filters_and_detail_imports(self):
         conn = memory_db()

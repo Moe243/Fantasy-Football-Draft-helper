@@ -223,6 +223,8 @@ main {
   background: #fffaf0;
   padding: 8px;
   min-height: 74px;
+  display: grid;
+  gap: 4px;
 }
 
 .draft-board-cell.header,
@@ -237,12 +239,67 @@ main {
   background: #ecf3ef;
 }
 
+.draft-board-cell.current {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px rgba(194, 122, 33, 0.2);
+}
+
+.draft-board-cell.my-current {
+  border-color: var(--green);
+  background: #dceee5;
+  box-shadow: 0 0 0 3px rgba(31, 111, 74, 0.22);
+}
+
 .draft-board-cell .pick-meta {
   display: block;
   color: var(--muted);
   font-size: 0.74rem;
   font-weight: 800;
   margin-bottom: 4px;
+}
+
+.draft-board-cell small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.pick-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tag.current-tag {
+  background: rgba(194, 122, 33, 0.14);
+  color: var(--amber);
+}
+
+.draft-room-status {
+  min-width: 190px;
+}
+
+.current-pick-banner {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fffaf0;
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.current-pick-banner.mine {
+  border-color: var(--green);
+  background: #ecf3ef;
+}
+
+.current-pick-banner span,
+.current-pick-banner small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
 .upcoming-picks {
@@ -255,6 +312,49 @@ main {
   border-radius: 8px;
   padding: 12px;
   background: #fffaf0;
+}
+
+.roster-needs {
+  display: grid;
+  gap: 8px;
+}
+
+.need-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 9px 10px;
+}
+
+.need-row.filled {
+  background: #ecf3ef;
+}
+
+.need-row em {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.manual-entry-panel {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.manual-entry-panel summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-weight: 850;
+}
+
+.manual-entry-panel .stack-form {
+  margin-top: 12px;
 }
 
 .players-filter-bar {
@@ -472,6 +572,17 @@ main {
   background: #fffdf7;
   color: var(--ink);
   border-color: var(--line);
+}
+
+.small-button.primary-button {
+  background: var(--green);
+  color: white;
+  border-color: var(--green);
+}
+
+.remove-pick-button {
+  margin-left: auto;
+  font-size: 0.78rem;
 }
 
 .text-button {

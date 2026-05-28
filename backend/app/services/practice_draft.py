@@ -28,6 +28,8 @@ def get_current_practice(conn: sqlite3.Connection, league_id: str) -> dict[str, 
     board = get_draft_board(conn, league_id)
     if not draft:
         return {"practice": None, "picks": [], "board": board}
+    recalculate_current_pick(conn, league_id, int(draft["id"]))
+    draft = active_practice(conn, league_id)
     picks = [
         dict(row)
         for row in conn.execute(
@@ -45,7 +47,27 @@ def make_user_pick(conn: sqlite3.Connection, league_id: str, player_id: str) -> 
         raise ValueError("That player has already been selected in this practice draft")
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "user")
-    advance_pick(conn, draft["id"], int(draft["current_pick"]) + 1)
+    recalculate_current_pick(conn, league_id, int(draft["id"]))
+    return get_current_practice(conn, league_id)
+
+
+def make_pick_at(
+    conn: sqlite3.Connection,
+    league_id: str,
+    player_id: str,
+    pick_no: int | None = None,
+    practice_draft_id: int | None = None,
+    source: str = "user",
+) -> dict[str, Any]:
+    draft = active_practice_by_id(conn, league_id, practice_draft_id) if practice_draft_id else require_active(conn, league_id)
+    if draft is None:
+        raise ValueError("Could not find practice draft")
+    if player_id in practice_drafted_player_ids(conn, int(draft["id"])):
+        raise ValueError("That player has already been selected in this practice draft")
+    target_pick = int(pick_no or draft["current_pick"] or 1)
+    pick_context = pick_context_for(conn, league_id, target_pick)
+    insert_practice_pick(conn, draft["id"], pick_context, player_id, source)
+    recalculate_current_pick(conn, league_id, int(draft["id"]))
     return get_current_practice(conn, league_id)
 
 
@@ -54,7 +76,7 @@ def simulate_next(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
     player_id = choose_auto_pick(conn, league_id, int(draft["id"]))
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "simulated")
-    advance_pick(conn, draft["id"], int(draft["current_pick"]) + 1)
+    recalculate_current_pick(conn, league_id, int(draft["id"]))
     return get_current_practice(conn, league_id)
 
 
@@ -77,10 +99,41 @@ def reset_practice(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     return {"status": "reset"}
 
 
+def remove_practice_pick(
+    conn: sqlite3.Connection,
+    league_id: str,
+    pick_no: int,
+    practice_draft_id: int | None = None,
+) -> bool:
+    draft = active_practice_by_id(conn, league_id, practice_draft_id) if practice_draft_id else active_practice(conn, league_id)
+    if not draft:
+        return False
+    cursor = conn.execute(
+        "DELETE FROM practice_draft_picks WHERE practice_draft_id = ? AND pick_no = ?",
+        (draft["id"], pick_no),
+    )
+    conn.commit()
+    recalculate_current_pick(conn, league_id, int(draft["id"]))
+    return cursor.rowcount > 0
+
+
 def active_practice(conn: sqlite3.Connection, league_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM practice_drafts WHERE league_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
         (league_id,),
+    ).fetchone()
+
+
+def active_practice_by_id(
+    conn: sqlite3.Connection,
+    league_id: str,
+    practice_draft_id: int | None,
+) -> sqlite3.Row | None:
+    if practice_draft_id is None:
+        return active_practice(conn, league_id)
+    return conn.execute(
+        "SELECT * FROM practice_drafts WHERE id = ? AND league_id = ? AND status = 'active'",
+        (practice_draft_id, league_id),
     ).fetchone()
 
 
@@ -95,6 +148,21 @@ def require_active(conn: sqlite3.Connection, league_id: str) -> sqlite3.Row:
 
 
 def pick_context_for(conn: sqlite3.Connection, league_id: str, pick_no: int) -> dict[str, Any]:
+    board = get_draft_board(conn, league_id)
+    for row_item in board.get("board") or []:
+        for cell in row_item.get("picks") or []:
+            if int(cell["pick_no"]) == int(pick_no):
+                return {
+                    "league_id": league_id,
+                    "pick_no": pick_no,
+                    "round": cell.get("round"),
+                    "draft_slot": cell.get("draft_slot"),
+                    "original_roster_id": cell.get("roster_id"),
+                    "current_roster_id": cell.get("roster_id"),
+                    "manager_name": cell.get("manager_name"),
+                    "is_mine": 1 if cell.get("is_mine") else 0,
+                    "source": "board",
+                }
     row = conn.execute(
         "SELECT * FROM user_draft_picks WHERE league_id = ? AND pick_no = ?",
         (league_id, pick_no),
@@ -193,3 +261,32 @@ def advance_pick(conn: sqlite3.Connection, practice_draft_id: int, next_pick: in
         (next_pick, practice_draft_id),
     )
     conn.commit()
+
+
+def recalculate_current_pick(conn: sqlite3.Connection, league_id: str, practice_draft_id: int) -> int:
+    max_pick = max_pick_for_league(conn, league_id)
+    picked = {
+        int(row["pick_no"])
+        for row in conn.execute(
+            "SELECT pick_no FROM practice_draft_picks WHERE practice_draft_id = ?",
+            (practice_draft_id,),
+        ).fetchall()
+        if row["pick_no"] is not None
+    }
+    next_pick = 1
+    while next_pick in picked and next_pick <= max_pick:
+        next_pick += 1
+    advance_pick(conn, practice_draft_id, next_pick)
+    return next_pick
+
+
+def max_pick_for_league(conn: sqlite3.Connection, league_id: str) -> int:
+    rows = [
+        conn.execute("SELECT MAX(pick_no) AS max_pick FROM user_draft_picks WHERE league_id = ?", (league_id,)).fetchone(),
+        conn.execute("SELECT MAX(pick_no) AS max_pick FROM league_draft_picks WHERE league_id = ?", (league_id,)).fetchone(),
+    ]
+    max_pick = max((int(row["max_pick"] or 0) for row in rows), default=0)
+    if max_pick:
+        return max_pick
+    teams = conn.execute("SELECT COUNT(*) AS count FROM league_managers WHERE league_id = ?", (league_id,)).fetchone()["count"] or 10
+    return int(teams) * 16

@@ -61,6 +61,7 @@
                 <h3>League Draft Board</h3>
                 <p>Teams as columns, rounds as rows, with your picks highlighted after your team is selected.</p>
               </div>
+              <div id="draft-room-status" class="draft-room-status"></div>
             </div>
             <div id="league-draft-board" class="draft-board-grid"></div>
           </section>
@@ -79,8 +80,8 @@
             <section class="panel recommendations-panel">
               <div class="panel-head">
                 <div>
-                  <h3>Recommended Picks</h3>
-                  <p>Updates after keepers and draft picks are marked.</p>
+                  <h3>Best Available</h3>
+                  <p>Draft directly from this list. The current pick is assigned automatically.</p>
                 </div>
                 <span id="current-pick" class="metric-chip">Pick 1</span>
               </div>
@@ -116,35 +117,44 @@
             <section class="panel">
               <div class="panel-head">
                 <div>
-                  <h3>Draft Action</h3>
-                  <p>Mark a pick as yours or taken by another team.</p>
+                  <h3>Roster Needs</h3>
+                  <p>Updates from your highlighted picks on the board.</p>
                 </div>
               </div>
-              <form id="pick-form" class="stack-form">
-                <label>
-                  Player
-                  <input list="player-options" id="pick-player" placeholder="Start typing a player" required />
-                </label>
-                <div class="form-row">
+              <div id="roster-needs" class="roster-needs"></div>
+
+              <details class="manual-entry-panel">
+                <summary>Manual Pick Entry</summary>
+                <form id="pick-form" class="stack-form">
                   <label>
-                    Pick
-                    <input id="pick-number" type="number" min="1" placeholder="Auto" />
+                    Player
+                    <input list="player-options" id="pick-player" placeholder="Start typing a player" />
                   </label>
-                  <label>
-                    Manager
-                    <select id="pick-manager">
-                      <option value="me">Me</option>
-                      <option value="opponent">Opponent</option>
-                    </select>
-                  </label>
+                  <div class="form-row">
+                    <label>
+                      Pick
+                      <input id="pick-number" type="number" min="1" placeholder="Current" />
+                    </label>
+                    <label>
+                      Manager
+                      <select id="pick-manager">
+                        <option value="me">Me</option>
+                        <option value="opponent">Opponent</option>
+                      </select>
+                    </label>
+                  </div>
+                  <button type="submit" class="primary-button">Add Manual Pick</button>
+                </form>
+              </details>
+
+              <details class="manual-entry-panel">
+                <summary>Drafted Players</summary>
+                <div class="list-head">
+                  <h4>Manual Drafted Players</h4>
+                  <button class="text-button" id="clear-picks">Clear</button>
                 </div>
-                <button type="submit" class="primary-button">Add Draft Pick</button>
-              </form>
-              <div class="list-head">
-                <h4>Drafted Players</h4>
-                <button class="text-button" id="clear-picks">Clear</button>
-              </div>
-              <div id="draft-picks" class="compact-list"></div>
+                <div id="draft-picks" class="compact-list"></div>
+              </details>
             </section>
           </div>
         </section>
@@ -189,13 +199,6 @@
               <button class="ghost-button" id="practice-sim-mine">Simulate To My Next Pick</button>
               <button class="ghost-button" id="practice-reset">Reset Practice Draft</button>
             </div>
-            <form id="practice-pick-form" class="stack-form practice-pick-form">
-              <label>
-                Make Pick
-                <input list="player-options" id="practice-pick-player" placeholder="Choose player for your pick" />
-              </label>
-              <button class="primary-button" type="submit">Make Pick</button>
-            </form>
             <div id="practice-status" class="compact-list"></div>
           </section>
         </section>

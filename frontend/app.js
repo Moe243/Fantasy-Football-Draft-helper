@@ -7,10 +7,17 @@ const state = {
   waiverGroups: {},
   playerSource: "sample",
   currentPick: 1,
+  currentPickTeam: null,
+  isMyPick: false,
   leagueId: window.localStorage.getItem("sleeperLeagueId") || "",
   setupStatus: null,
   managers: [],
   draftBoard: null,
+  draftState: null,
+  bestAvailable: [],
+  myPicks: [],
+  likelyAvailable: [],
+  rosterNeeds: [],
   playersSearch: { players: [], total: 0, limit: 50, offset: 0 },
   selectedPlayer: null,
   practiceStatus: null,
@@ -50,7 +57,7 @@ async function loadAll() {
   renderAll();
   await Promise.all([refreshWaivers(), refreshSetupStatus(), refreshPlayersSearch()]);
   if (state.leagueId) {
-    await Promise.all([refreshLeagueManagers(), refreshDraftBoard(), refreshPracticeStatus()]);
+    await Promise.all([refreshLeagueManagers(), refreshDraftState()]);
   }
 }
 
@@ -61,8 +68,10 @@ function renderAll() {
   renderPicks();
   renderKeepers();
   renderWaivers();
+  renderDraftRoomStatus();
   renderDraftBoard();
   renderMyUpcomingPicks();
+  renderRosterNeeds();
   renderPlayersTable();
   renderPlayerDetail();
   renderMyTeamSelect();
@@ -89,7 +98,7 @@ function renderPlayerOptions() {
 function renderRecommendations() {
   const container = $("#recommendations");
   if (!state.recommendations.length) {
-    container.innerHTML = emptyState("No recommendations available. Import players or clear picks and keepers to reset the board.");
+    container.innerHTML = emptyState("No best available players yet. Import your Sleeper league and player data, then refresh the draft room.");
     return;
   }
   container.innerHTML = state.recommendations
@@ -114,8 +123,7 @@ function renderRecommendations() {
               ${(item.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}
             </ul>
             <div class="card-actions">
-              <button class="small-button" data-draft-me="${escapeHtml(playerId)}">Draft to me</button>
-              <button class="small-button" data-draft-taken="${escapeHtml(playerId)}">Mark taken</button>
+              <button class="primary-button small-button" data-draft-player="${escapeHtml(playerId)}">Draft</button>
               <button class="small-button" data-player-detail="${escapeHtml(playerId)}">Details</button>
             </div>
           </div>
@@ -158,7 +166,7 @@ function formatMetric(value) {
 
 function renderPicks() {
   const container = $("#draft-picks");
-  $("#pick-number").placeholder = String((state.picks.at(-1)?.pick_no || 0) + 1);
+  $("#pick-number").placeholder = state.leagueId ? `Current (${state.currentPick || 1})` : String((state.picks.at(-1)?.pick_no || 0) + 1);
   if (!state.picks.length) {
     container.innerHTML = emptyState("No manual draft picks marked yet.");
     return;
@@ -239,6 +247,25 @@ function renderDraftBoard(boardData = state.draftBoard, selector = "#league-draf
   container.innerHTML = draftBoardHtml(boardData);
 }
 
+function renderDraftRoomStatus() {
+  const container = $("#draft-room-status");
+  if (!container) return;
+  if (!state.leagueId) {
+    container.innerHTML = `<span class="metric-chip">No league</span>`;
+    return;
+  }
+  const team = state.currentPickTeam;
+  const teamName = team?.manager_name || "Unknown team";
+  const label = state.isMyPick ? "Your pick" : "On the clock";
+  container.innerHTML = `
+    <div class="current-pick-banner${state.isMyPick ? " mine" : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>Pick ${escapeHtml(state.currentPick || 1)}</strong>
+      <small>${escapeHtml(teamName)}</small>
+    </div>
+  `;
+}
+
 function draftBoardHtml(boardData) {
   if (!state.leagueId) {
     return emptyState("Enter a Sleeper league ID in Setup to build your league draft board.");
@@ -270,17 +297,21 @@ function draftCell(pick) {
   const player = pick.player;
   const classes = ["draft-board-cell"];
   if (pick.is_mine) classes.push("mine");
+  if (pick.is_current_pick) classes.push("current");
+  if (pick.is_my_current_pick) classes.push("my-current");
   if (pick.is_keeper) classes.push("keeper");
   const playerLabel = player
-    ? `<strong>${escapeHtml(player.name || player.full_name)}</strong><span>${escapeHtml(player.position || "")}${player.team ? ` · ${escapeHtml(player.team)}` : ""}</span>`
-    : `<strong>Open</strong><span>${escapeHtml(pick.manager_name || "")}</span>`;
+    ? `<strong>${escapeHtml(player.name || player.full_name)}</strong><span>${escapeHtml(player.position || "")}${player.team ? ` · ${escapeHtml(player.team)}` : ""}</span><small>${escapeHtml(pick.manager_name || "")}</small>`
+    : `<strong>Pick ${escapeHtml(pick.pick_no)}</strong><span>${escapeHtml(pick.manager_name || "Open")}</span>`;
   const keeper = pick.is_keeper ? `<span class="tag fit">Keeper</span>` : "";
   const practice = pick.practice_source ? `<span class="tag position">${escapeHtml(pick.practice_source)}</span>` : "";
+  const current = pick.is_current_pick ? `<span class="tag current-tag">${pick.is_mine ? "My pick" : "Current"}</span>` : "";
+  const remove = player && !pick.is_keeper ? `<button class="text-button remove-pick-button" data-remove-board-pick="${escapeHtml(pick.pick_no)}">Remove</button>` : "";
   return `
     <div class="${classes.join(" ")}">
       <span class="pick-meta">Pick ${escapeHtml(pick.pick_no)} · Slot ${escapeHtml(pick.draft_slot)}</span>
       ${playerLabel}
-      ${keeper}${practice}
+      <div class="pick-tags">${current}${keeper}${practice}${remove}</div>
     </div>
   `;
 }
@@ -292,12 +323,12 @@ function renderMyUpcomingPicks() {
     container.innerHTML = emptyState("Import your Sleeper league to see your upcoming picks.");
     return;
   }
-  const picks = state.draftBoard?.my_picks || [];
+  const picks = state.myPicks || state.draftBoard?.my_picks || [];
   if (!picks.length) {
     container.innerHTML = emptyState("Select My Team in Setup to highlight your picks.");
     return;
   }
-  const upcoming = picks.filter((pick) => Number(pick.pick_no) >= 1).slice(0, 8);
+  const upcoming = picks.filter((pick) => Number(pick.pick_no) >= Number(state.currentPick || 1)).slice(0, 8);
   container.innerHTML = upcoming.map((pick) => {
     const names = (pick.likely_available || [])
       .map((item) => item.player?.full_name || item.player?.name)
@@ -311,6 +342,23 @@ function renderMyUpcomingPicks() {
       </article>
     `;
   }).join("");
+}
+
+function renderRosterNeeds() {
+  const container = $("#roster-needs");
+  if (!container) return;
+  const needs = state.rosterNeeds || [];
+  if (!needs.length) {
+    container.innerHTML = emptyState("Select My Team and start drafting to track roster needs.");
+    return;
+  }
+  container.innerHTML = needs.map((need) => `
+    <div class="need-row${need.remaining > 0 ? "" : " filled"}">
+      <strong>${escapeHtml(need.position)}</strong>
+      <span>${escapeHtml(need.current)} / ${escapeHtml(need.target)}</span>
+      <em>${need.remaining > 0 ? `${escapeHtml(need.remaining)} needed` : "Filled"}</em>
+    </div>
+  `).join("");
 }
 
 function renderPlayersTable() {
@@ -523,7 +571,7 @@ function renderPracticeStatus() {
     return;
   }
   if (!state.practiceStatus?.practice) {
-    container.innerHTML = emptyState("No active practice draft yet.");
+    container.innerHTML = emptyState("No active practice draft yet. Start one to save picks through browser refresh.");
     return;
   }
   const practice = state.practiceStatus.practice;
@@ -537,11 +585,19 @@ function renderPracticeStatus() {
     ${lastPicks.length ? lastPicks.map((pick) => `
       <div class="compact-row">
         <span>Pick ${escapeHtml(pick.pick_no)} · ${escapeHtml(pick.manager_name || "")}</span>
-        <strong>${escapeHtml(pick.player_id || "")}</strong>
+        <strong>${escapeHtml(playerNameFromBoardPick(pick.pick_no) || pick.player_id || "")}</strong>
       </div>
     `).join("") : emptyState("No practice picks yet.")}
     <div class="draft-board-grid">${draftBoardHtml(state.practiceStatus.board)}</div>
   `;
+}
+
+function playerNameFromBoardPick(pickNo) {
+  for (const row of state.draftBoard?.board || []) {
+    const cell = (row.picks || []).find((pick) => Number(pick.pick_no) === Number(pickNo));
+    if (cell?.player) return cell.player.full_name || cell.player.name;
+  }
+  return "";
 }
 
 function emptyState(text) {
@@ -559,6 +615,10 @@ function normalize(value) {
 }
 
 async function refreshDraft() {
+  if (state.leagueId) {
+    await refreshDraftState();
+    return;
+  }
   const [picks, keepers, draft] = await Promise.all([
     api("/api/draft/picks"),
     api("/api/keepers"),
@@ -572,7 +632,54 @@ async function refreshDraft() {
   renderRecommendations();
   renderPicks();
   renderKeepers();
-  await Promise.all([refreshDraftBoard(), refreshPracticeStatus()]);
+}
+
+async function refreshDraftState() {
+  if (!state.leagueId) {
+    state.draftState = null;
+    state.draftBoard = null;
+    state.bestAvailable = [];
+    state.myPicks = [];
+    state.likelyAvailable = [];
+    state.rosterNeeds = [];
+    state.currentPickTeam = null;
+    state.isMyPick = false;
+    renderDraftRoomStatus();
+    renderDraftBoard();
+    renderMyUpcomingPicks();
+    renderRosterNeeds();
+    return;
+  }
+  const query = new URLSearchParams(draftStateQueryParams());
+  query.set("league_id", state.leagueId);
+  const payload = await api(`/api/draft/state?${query.toString()}`);
+  applyDraftState(payload);
+}
+
+function applyDraftState(payload) {
+  state.draftState = payload;
+  state.draftBoard = payload;
+  state.currentPick = payload.current_pick || 1;
+  state.currentPickTeam = payload.current_pick_team || null;
+  state.isMyPick = Boolean(payload.is_my_pick);
+  state.recommendations = payload.best_available || [];
+  state.bestAvailable = payload.best_available || [];
+  state.myPicks = payload.my_picks || [];
+  state.likelyAvailable = payload.likely_available || [];
+  state.rosterNeeds = payload.roster_needs || [];
+  state.practiceStatus = {
+    practice: payload.practice || null,
+    picks: payload.practice_picks || [],
+    board: payload,
+  };
+  renderStatus();
+  renderDraftRoomStatus();
+  renderDraftBoard();
+  renderMyUpcomingPicks();
+  renderRosterNeeds();
+  renderRecommendations();
+  renderPicks();
+  renderPracticeStatus();
 }
 
 async function refreshWaivers() {
@@ -644,33 +751,11 @@ async function refreshLeagueManagers() {
 }
 
 async function refreshDraftBoard() {
-  if (!state.leagueId) {
-    state.draftBoard = null;
-    renderDraftBoard();
-    renderMyUpcomingPicks();
-    return;
-  }
-  try {
-    state.draftBoard = await api(`/api/draft/board?league_id=${encodeURIComponent(state.leagueId)}`);
-  } catch (error) {
-    state.draftBoard = null;
-  }
-  renderDraftBoard();
-  renderMyUpcomingPicks();
+  await refreshDraftState();
 }
 
 async function refreshPracticeStatus() {
-  if (!state.leagueId) {
-    state.practiceStatus = null;
-    renderPracticeStatus();
-    return;
-  }
-  try {
-    state.practiceStatus = await api(`/api/practice/current?league_id=${encodeURIComponent(state.leagueId)}`);
-  } catch (error) {
-    state.practiceStatus = null;
-  }
-  renderPracticeStatus();
+  await refreshDraftState();
 }
 
 async function loadPlayerDetail(playerId) {
@@ -689,6 +774,15 @@ function draftQueryString() {
   query.set("hide_drafted", $("#hide-drafted-filter")?.checked ? "1" : "0");
   query.set("hide_keepers", $("#hide-keepers-filter")?.checked ? "1" : "0");
   return query.toString();
+}
+
+function draftStateQueryParams() {
+  const query = new URLSearchParams();
+  const position = $("#draft-position-filter")?.value;
+  const search = $("#draft-search-filter")?.value.trim();
+  if (position) query.set("position", position);
+  if (search) query.set("search", search);
+  return query;
 }
 
 function setActiveTab(tab) {
@@ -821,7 +915,7 @@ document.addEventListener("click", async (event) => {
       method: "POST",
       body: JSON.stringify({ league_id: leagueId, roster_id: rosterId }),
     });
-    await Promise.all([refreshLeagueManagers(), refreshDraftBoard(), refreshPracticeStatus(), refreshSetupStatus()]);
+    await Promise.all([refreshLeagueManagers(), refreshDraftState(), refreshSetupStatus()]);
     toast("My Team saved.");
     return;
   }
@@ -829,11 +923,11 @@ document.addEventListener("click", async (event) => {
   if (target.id === "practice-start") {
     const leagueId = requireLeagueId();
     if (!leagueId) return;
-    state.practiceStatus = await api("/api/practice/start", {
+    await api("/api/practice/start", {
       method: "POST",
       body: JSON.stringify({ league_id: leagueId }),
     });
-    renderPracticeStatus();
+    await refreshDraftState();
     toast("Practice draft started.");
     return;
   }
@@ -841,11 +935,11 @@ document.addEventListener("click", async (event) => {
   if (target.id === "practice-sim-next") {
     const leagueId = requireLeagueId();
     if (!leagueId) return;
-    state.practiceStatus = await api("/api/practice/simulate-next", {
+    await api("/api/practice/simulate-next", {
       method: "POST",
       body: JSON.stringify({ league_id: leagueId }),
     });
-    renderPracticeStatus();
+    await refreshDraftState();
     toast("Simulated one pick.");
     return;
   }
@@ -853,11 +947,11 @@ document.addEventListener("click", async (event) => {
   if (target.id === "practice-sim-mine") {
     const leagueId = requireLeagueId();
     if (!leagueId) return;
-    state.practiceStatus = await api("/api/practice/simulate-to-my-next-pick", {
+    await api("/api/practice/simulate-to-my-next-pick", {
       method: "POST",
       body: JSON.stringify({ league_id: leagueId }),
     });
-    renderPracticeStatus();
+    await refreshDraftState();
     toast("Simulated to your next pick.");
     return;
   }
@@ -866,7 +960,7 @@ document.addEventListener("click", async (event) => {
     const leagueId = requireLeagueId();
     if (!leagueId) return;
     await api(`/api/practice/reset?league_id=${encodeURIComponent(leagueId)}`, { method: "DELETE" });
-    await refreshPracticeStatus();
+    await refreshDraftState();
     toast("Practice draft reset.");
     return;
   }
@@ -891,18 +985,34 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  const draftMe = target.dataset.draftMe;
-  const draftTaken = target.dataset.draftTaken;
-  if (draftMe || draftTaken) {
-    await api("/api/draft/picks", {
+  if (target.dataset.removeBoardPick) {
+    const leagueId = requireLeagueId();
+    if (!leagueId) return;
+    const result = await api(`/api/draft/pick?league_id=${encodeURIComponent(leagueId)}&pick_no=${encodeURIComponent(target.dataset.removeBoardPick)}`, {
+      method: "DELETE",
+    });
+    applyDraftState(result);
+    toast(`Removed pick ${target.dataset.removeBoardPick}.`);
+    return;
+  }
+
+  const draftPlayer = target.dataset.draftPlayer;
+  if (draftPlayer) {
+    const leagueId = requireLeagueId();
+    if (!leagueId) return;
+    const result = await api("/api/draft/pick", {
       method: "POST",
       body: JSON.stringify({
-        player_id: draftMe || draftTaken,
-        manager: draftMe ? "me" : "opponent",
+        league_id: leagueId,
+        practice_draft_id: state.practiceStatus?.practice?.id || null,
+        player_id: draftPlayer,
+        pick_no: null,
       }),
     });
-    await refreshDraft();
-    toast(draftMe ? "Player added to your roster." : "Player marked as taken.");
+    applyDraftState(result);
+    const pick = result.last_pick;
+    const playerName = pick?.player?.full_name || pick?.player?.name || "Player";
+    toast(`Drafted ${playerName} at pick ${pick?.pick_no || state.currentPick}.`);
     return;
   }
 
@@ -961,37 +1071,38 @@ $("#pick-form").addEventListener("submit", async (event) => {
     toast("Choose a player from the current player pool.");
     return;
   }
-  await api("/api/draft/picks", {
-    method: "POST",
-    body: JSON.stringify({
-      player_id: player.id || player.internal_player_id,
-      pick_no: $("#pick-number").value || null,
-      manager: $("#pick-manager").value,
-    }),
-  });
+  if (state.leagueId) {
+    const result = await api("/api/draft/pick", {
+      method: "POST",
+      body: JSON.stringify({
+        league_id: state.leagueId,
+        practice_draft_id: state.practiceStatus?.practice?.id || null,
+        player_id: player.id || player.internal_player_id,
+        pick_no: $("#pick-number").value || null,
+      }),
+    });
+    applyDraftState(result);
+  } else {
+    await api("/api/draft/picks", {
+      method: "POST",
+      body: JSON.stringify({
+        player_id: player.id || player.internal_player_id,
+        pick_no: $("#pick-number").value || null,
+        manager: $("#pick-manager").value,
+      }),
+    });
+    await refreshDraft();
+  }
   event.target.reset();
-  await refreshDraft();
   await refreshWaivers();
   toast("Draft pick added.");
 });
 
-$("#practice-pick-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const leagueId = requireLeagueId();
-  if (!leagueId) return;
-  const player = findPlayerByName($("#practice-pick-player").value);
-  if (!player) {
-    toast("Choose a player from the current player pool.");
-    return;
-  }
-  state.practiceStatus = await api("/api/practice/pick", {
-    method: "POST",
-    body: JSON.stringify({ league_id: leagueId, player_id: player.id || player.internal_player_id }),
+if ($("#practice-pick-form")) {
+  $("#practice-pick-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
   });
-  event.target.reset();
-  renderPracticeStatus();
-  toast("Practice pick made.");
-});
+}
 
 $("#sleeper-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1008,7 +1119,7 @@ $("#sleeper-form").addEventListener("submit", async (event) => {
   window.localStorage.setItem("sleeperLeagueId", leagueId);
   state.settings = result.imported.league_settings;
   renderStatus();
-  await Promise.all([refreshLeagueManagers(), refreshSetupStatus(), refreshDraftBoard(), refreshPracticeStatus(), refreshDraft()]);
+  await Promise.all([refreshLeagueManagers(), refreshSetupStatus(), refreshDraftState()]);
   toast(`Imported ${result.imported.league?.name || "Sleeper league"}.`);
 });
 

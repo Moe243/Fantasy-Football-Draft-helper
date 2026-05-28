@@ -172,8 +172,9 @@ def database_draft_recommendations(
     search: str | None = None,
     hide_drafted: bool = True,
     hide_keepers: bool = True,
+    current_pick_override: int | None = None,
 ) -> list[dict[str, Any]]:
-    current_pick = current_pick_number(picks, keepers)
+    current_pick = current_pick_override or current_pick_number(picks, keepers)
     consensus_rows = get_consensus_rows(
         conn,
         position=position,
