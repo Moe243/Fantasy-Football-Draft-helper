@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fantasy Football Assistant</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Fantasy assistant navigation">
+        <div class="brand-block">
+          <div class="brand-mark">FF</div>
+          <div>
+            <p class="eyebrow">Draft and weekly decisions</p>
+            <h1>Fantasy Assistant</h1>
+          </div>
+        </div>
+
+        <nav class="nav-tabs" aria-label="Primary views">
+          <button class="nav-tab active" data-tab="draft">Draft Board</button>
+          <button class="nav-tab" data-tab="waivers">Waivers</button>
+          <button class="nav-tab" data-tab="chat">Chat</button>
+          <button class="nav-tab" data-tab="setup">Setup</button>
+        </nav>
+
+        <section class="status-panel" aria-label="League status">
+          <span class="status-pill">Local MVP</span>
+          <dl>
+            <div>
+              <dt>Scoring</dt>
+              <dd id="status-scoring">PPR</dd>
+            </div>
+            <div>
+              <dt>Teams</dt>
+              <dd id="status-teams">10</dd>
+            </div>
+            <div>
+              <dt>Draft slot</dt>
+              <dd id="status-slot">6</dd>
+            </div>
+          </dl>
+        </section>
+      </aside>
+
+      <main>
+        <section class="view active" id="view-draft" aria-labelledby="draft-heading">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">Live draft</p>
+              <h2 id="draft-heading">Best Available Board</h2>
+            </div>
+            <button class="ghost-button" id="refresh-draft">Refresh</button>
+          </div>
+
+          <div class="draft-grid">
+            <section class="panel recommendations-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Recommended Picks</h3>
+                  <p>Updates after keepers and draft picks are marked.</p>
+                </div>
+                <span id="current-pick" class="metric-chip">Pick 1</span>
+              </div>
+              <div id="recommendations" class="recommendation-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Draft Action</h3>
+                  <p>Mark a pick as yours or taken by another team.</p>
+                </div>
+              </div>
+              <form id="pick-form" class="stack-form">
+                <label>
+                  Player
+                  <input list="player-options" id="pick-player" placeholder="Start typing a player" required />
+                </label>
+                <div class="form-row">
+                  <label>
+                    Pick
+                    <input id="pick-number" type="number" min="1" placeholder="Auto" />
+                  </label>
+                  <label>
+                    Manager
+                    <select id="pick-manager">
+                      <option value="me">Me</option>
+                      <option value="opponent">Opponent</option>
+                    </select>
+                  </label>
+                </div>
+                <button type="submit" class="primary-button">Add Draft Pick</button>
+              </form>
+              <div class="list-head">
+                <h4>Drafted Players</h4>
+                <button class="text-button" id="clear-picks">Clear</button>
+              </div>
+              <div id="draft-picks" class="compact-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-waivers" aria-labelledby="waiver-heading">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">Weekly moves</p>
+              <h2 id="waiver-heading">Rising Stock Watchlist</h2>
+            </div>
+            <button class="ghost-button" id="refresh-waivers">Refresh</button>
+          </div>
+          <div id="waiver-groups" class="waiver-grid"></div>
+        </section>
+
+        <section class="view" id="view-chat" aria-labelledby="chat-heading">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">Ask the assistant</p>
+              <h2 id="chat-heading">Fantasy Chatbot</h2>
+            </div>
+          </div>
+          <div class="chat-layout">
+            <section class="panel chat-panel">
+              <div id="chat-log" class="chat-log" aria-live="polite"></div>
+              <form id="chat-form" class="chat-form">
+                <input id="chat-input" placeholder="Who should I draft next?" required />
+                <button type="submit" class="primary-button">Ask</button>
+              </form>
+            </section>
+            <section class="panel">
+              <h3>Quick Prompts</h3>
+              <div class="prompt-list">
+                <button class="prompt-button">Who should I draft next?</button>
+                <button class="prompt-button">Who are the best waiver pickups this week?</button>
+                <button class="prompt-button">Which RBs are gaining value?</button>
+                <button class="prompt-button">Should I keep Ja'Marr Chase in round 1?</button>
+                <button class="prompt-button">Who has the best matchup this week?</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-setup" aria-labelledby="setup-heading">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">League setup</p>
+              <h2 id="setup-heading">Settings and Keepers</h2>
+            </div>
+          </div>
+
+          <div class="setup-grid">
+            <section class="panel">
+              <h3>League Settings</h3>
+              <form id="settings-form" class="stack-form">
+                <div class="form-row">
+                  <label>
+                    Teams
+                    <input id="settings-teams" type="number" min="4" max="20" />
+                  </label>
+                  <label>
+                    Draft slot
+                    <input id="settings-slot" type="number" min="1" max="20" />
+                  </label>
+                </div>
+                <label>
+                  Scoring
+                  <select id="settings-scoring">
+                    <option>PPR</option>
+                    <option>Half PPR</option>
+                    <option>Standard</option>
+                  </select>
+                </label>
+                <button type="submit" class="primary-button">Save Settings</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h3>Sleeper Import</h3>
+              <form id="sleeper-form" class="stack-form">
+                <label>
+                  Sleeper league ID
+                  <input id="sleeper-league" placeholder="Example: 104945..." />
+                </label>
+                <button type="submit" class="primary-button">Import League</button>
+              </form>
+              <p class="helper-copy">Sleeper can import league settings, rosters, users, draft metadata, and picks. Manual keeper entry stays available when keeper slots are not encoded cleanly.</p>
+            </section>
+
+            <section class="panel keeper-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Manual Keepers</h3>
+                  <p>Add players already kept by any team.</p>
+                </div>
+                <button class="text-button" id="clear-keepers">Clear</button>
+              </div>
+              <form id="keeper-form" class="stack-form">
+                <label>
+                  Player
+                  <input list="player-options" id="keeper-player" placeholder="Start typing a player" required />
+                </label>
+                <div class="form-row">
+                  <label>
+                    Team
+                    <input id="keeper-team" placeholder="Team name" required />
+                  </label>
+                  <label>
+                    Round
+                    <input id="keeper-round" type="number" min="1" placeholder="Optional" />
+                  </label>
+                  <label>
+                    Pick
+                    <input id="keeper-pick" type="number" min="1" placeholder="Optional" />
+                  </label>
+                </div>
+                <button type="submit" class="primary-button">Add Keeper</button>
+              </form>
+              <div id="keepers" class="compact-list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <datalist id="player-options"></datalist>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
