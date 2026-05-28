@@ -20,7 +20,7 @@ This repo starts smaller on purpose: the MVP runs with the Python standard libra
 Recommended source strategy:
 
 - **Sleeper:** Primary league integration. Use it for users, leagues, rosters, drafts, draft picks, players, and trending adds/drops.
-- **Projection/ranking feeds:** Add a paid or licensed source for current projections, ADP, weekly ranks, injuries, depth charts, snap counts, and route data.
+- **Projection/ranking feeds:** Import rankings/projections as JSON rows first, then add paid or licensed sources for current projections, ADP, weekly ranks, injuries, depth charts, snap counts, and route data.
 - **Odds feed:** Use The Odds API or a similar provider for spreads, totals, moneylines, implied team totals, and line movement.
 - **ESPN/NFL.com:** Treat these as optional adapters. Do not make them core dependencies unless you have authenticated, licensed, or otherwise stable access.
 
@@ -48,15 +48,18 @@ flowchart LR
 
 ## Database Shape
 
-The MVP stores only the state needed to make the first workflows useful:
+The MVP stores league state plus normalized multi-source player data:
 
 - `league_settings`: team count, scoring format, draft slot, roster slots.
 - `keepers`: manually entered kept players, team, round, and pick.
 - `draft_picks`: live draft picks marked as yours or an opponent's.
+- `players`: canonical player identities, using Sleeper as the primary identity source.
+- `player_source_rankings`: imported source rankings, ADP, projections, tiers, bye weeks, and raw JSON.
+- `source_import_runs`: import status, counts, and error tracking.
 
 Production should add:
 
-- `players`, `player_identities`, `teams`, `games`, `weekly_stats`, `projections`, `depth_charts`, `injuries`, `odds_snapshots`, `news_items`, `league_rosters`, `recommendation_runs`, and `notification_runs`.
+- `player_identities`, `teams`, `games`, `weekly_stats`, `depth_charts`, `injuries`, `odds_snapshots`, `news_items`, `league_rosters`, `recommendation_runs`, and `notification_runs`.
 
 ## Run Locally
 
@@ -75,16 +78,25 @@ python3 -m unittest discover backend/tests
 ## MVP Workflow
 
 1. Set league settings in the Setup tab.
-2. Add manual keepers if Sleeper keeper data is incomplete.
-3. Use the Draft Board to mark picks as they happen.
-4. Ask the chatbot draft, keeper, waiver, and matchup questions.
-5. Use the Waivers tab as the seed version of the weekly rising-stock alert.
+2. Click **Import Sleeper Players** to load the real NFL player pool into SQLite.
+3. Import rankings/projections JSON from FantasyPros, ESPN, or another source.
+4. Add manual keepers if Sleeper keeper data is incomplete.
+5. Use the Draft Board to mark picks as they happen.
+6. Ask the chatbot draft, keeper, waiver, and matchup questions.
+7. Use the Waivers tab to pull enriched Sleeper trending adds when player data is imported.
+
+## Multi-Source Endpoints
+
+- `POST /api/integrations/sleeper/players/import`: imports all fantasy-relevant NFL players from Sleeper.
+- `GET /api/players?position=RB&search=chase&active=1`: reads database players first, then falls back to seed data.
+- `POST /api/rankings/import/csv`: imports JSON ranking rows under a source name.
+- `GET /api/players/consensus?position=RB&limit=100&current_pick=25`: compares available source rankings.
+- `GET /api/integrations/sleeper/trending/enriched`: enriches Sleeper trending adds with local player and consensus data.
 
 ## Next Build Steps
 
-1. Replace `backend/app/sample_data.py` with a projection ingestion table and scheduled import.
-2. Normalize Sleeper player IDs against provider-specific IDs.
+1. Add real CSV file upload and source-specific column mapping screens.
+2. Add scheduled refreshes for Sleeper players, rankings, injuries, odds, and trending adds.
 3. Add a proper `notifications` worker that sends the weekly top-5 risers by position.
 4. Add LLM tool calling so chat answers can call `draft_recommendations`, `waiver_risers`, `evaluate_keeper`, and matchup endpoints.
 5. Add a real auth model for your league/user data before deploying beyond localhost.
-

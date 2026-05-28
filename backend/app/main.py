@@ -15,9 +15,18 @@ from .config import settings
 from .models import DraftPick, Keeper
 from .providers.http import ProviderError
 from .providers.odds import OddsClient
+from .providers.rankings_csv import import_ranking_rows
 from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
-from .services.recommendations import chat_response, current_pick_number, draft_recommendations, waiver_risers
+from .services.consensus import get_consensus_for_player, get_consensus_rows
+from .services.recommendations import (
+    chat_response,
+    current_pick_number,
+    database_draft_recommendations,
+    draft_recommendations,
+    waiver_risers,
+)
+from .services.sleeper_import import import_sleeper_players
 
 
 def json_default(value: Any) -> Any:
@@ -87,10 +96,24 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
         if method == "GET" and path == "/api/players":
             position = first(query, "position")
-            players = SAMPLE_PLAYERS
-            if position:
-                players = [player for player in players if player.position == position.upper()]
-            return {"players": [player.to_dict() for player in players]}
+            search = first(query, "search")
+            active = optional_query_int(first(query, "active"))
+            players, source = db.get_players_for_api(conn, position=position, search=search, active=active)
+            return {"players": players, "source": source}
+
+        if method == "GET" and path == "/api/players/consensus":
+            position = first(query, "position")
+            limit = int(first(query, "limit") or "100")
+            current_pick = int(first(query, "current_pick") or current_pick_number(picks, keepers))
+            return {
+                "current_pick": current_pick,
+                "players": get_consensus_rows(
+                    conn,
+                    position=position,
+                    limit=limit,
+                    current_pick=current_pick,
+                ),
+            }
 
         if path == "/api/league/settings":
             if method == "GET":
@@ -100,7 +123,7 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
         if path == "/api/keepers":
             if method == "GET":
-                return {"keepers": [enrich_keeper(keeper) for keeper in keepers]}
+                return {"keepers": [enrich_keeper(conn, keeper) for keeper in keepers]}
             if method == "POST":
                 payload = self.read_json()
                 keeper = Keeper(
@@ -109,9 +132,9 @@ class FantasyHandler(BaseHTTPRequestHandler):
                     round=optional_int(payload.get("round")),
                     pick_no=optional_int(payload.get("pick_no")),
                 )
-                validate_player_id(keeper.player_id)
+                validate_player_id(conn, keeper.player_id)
                 db.upsert_keeper(conn, keeper)
-                return {"keepers": [enrich_keeper(item) for item in db.get_keepers(conn)]}
+                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
             if method == "DELETE":
                 player_id = first(query, "player_id")
                 team_name = first(query, "team_name")
@@ -119,11 +142,11 @@ class FantasyHandler(BaseHTTPRequestHandler):
                     db.delete_keeper(conn, player_id, team_name)
                 else:
                     db.clear_keepers(conn)
-                return {"keepers": [enrich_keeper(item) for item in db.get_keepers(conn)]}
+                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
 
         if path == "/api/draft/picks":
             if method == "GET":
-                return {"picks": [enrich_pick(pick) for pick in picks]}
+                return {"picks": [enrich_pick(conn, pick) for pick in picks]}
             if method == "POST":
                 payload = self.read_json()
                 pick = DraftPick(
@@ -132,23 +155,42 @@ class FantasyHandler(BaseHTTPRequestHandler):
                     manager=str(payload.get("manager") or "opponent"),
                     source=str(payload.get("source") or "manual"),
                 )
-                validate_player_id(pick.player_id)
+                validate_player_id(conn, pick.player_id)
                 db.add_draft_pick(conn, pick)
-                return {"picks": [enrich_pick(item) for item in db.get_draft_picks(conn)]}
+                return {"picks": [enrich_pick(conn, item) for item in db.get_draft_picks(conn)]}
             if method == "DELETE":
                 pick_no = first(query, "pick_no")
                 if pick_no:
                     db.remove_draft_pick(conn, int(pick_no))
                 else:
                     db.clear_draft_picks(conn)
-                return {"picks": [enrich_pick(item) for item in db.get_draft_picks(conn)]}
+                return {"picks": [enrich_pick(conn, item) for item in db.get_draft_picks(conn)]}
 
         if method == "GET" and path == "/api/draft/recommendations":
             limit = int(first(query, "limit") or "12")
             manager = first(query, "manager") or "me"
+            if db.has_database_players(conn):
+                recs = database_draft_recommendations(
+                    conn,
+                    settings_record,
+                    keepers,
+                    picks,
+                    limit=limit,
+                    manager=manager,
+                    position=first(query, "position"),
+                    search=first(query, "search"),
+                    hide_drafted=bool_query(first(query, "hide_drafted"), default=True),
+                    hide_keepers=bool_query(first(query, "hide_keepers"), default=True),
+                )
+                return {
+                    "current_pick": current_pick_number(picks, keepers),
+                    "source": "database",
+                    "recommendations": recs,
+                }
             recs = draft_recommendations(settings_record, keepers, picks, limit=limit, manager=manager)
             return {
                 "current_pick": current_pick_number(picks, keepers),
+                "source": "sample",
                 "recommendations": [rec.to_dict() for rec in recs],
             }
 
@@ -162,6 +204,11 @@ class FantasyHandler(BaseHTTPRequestHandler):
             message = str(payload.get("message") or "")
             if not message.strip():
                 raise ValueError("message is required")
+            if db.has_database_players(conn) and any(term in message.lower() for term in ("draft next", "draft", "pick next", "best available")):
+                recs = database_draft_recommendations(conn, settings_record, keepers, picks, limit=5)
+                best = recs[0] if recs else None
+                answer = f"My top draft target is {best['player']['full_name']} because {best['reasons'][0].lower()}" if best else "I do not see an available imported player on the board."
+                return {"intent": "draft_recommendation", "answer": answer, "cards": recs}
             return chat_response(message, settings_record, keepers, picks)
 
         if method == "POST" and path == "/api/integrations/sleeper/import":
@@ -171,10 +218,28 @@ class FantasyHandler(BaseHTTPRequestHandler):
             imported = import_sleeper_settings(conn, snapshot)
             return {"imported": imported, "snapshot": summarize_sleeper_snapshot(snapshot)}
 
+        if method == "POST" and path == "/api/integrations/sleeper/players/import":
+            players = SleeperClient().players("nfl")
+            return import_sleeper_players(conn, players)
+
         if method == "GET" and path == "/api/integrations/sleeper/trending":
             trend_type = first(query, "type") or "add"
             limit = int(first(query, "limit") or "25")
             return {"trending": SleeperClient().trending(trend_type=trend_type, limit=limit)}
+
+        if method == "GET" and path == "/api/integrations/sleeper/trending/enriched":
+            trend_type = first(query, "type") or "add"
+            limit = int(first(query, "limit") or "25")
+            lookback = int(first(query, "lookback_hours") or "24")
+            return enriched_sleeper_trending(conn, trend_type=trend_type, limit=limit, lookback_hours=lookback)
+
+        if method == "POST" and path == "/api/rankings/import/csv":
+            payload = self.read_json()
+            rows = payload.get("rows")
+            if not isinstance(rows, list):
+                raise ValueError("rows must be a list")
+            source_name = require(payload, "source_name")
+            return import_ranking_rows(conn, source_name, rows)
 
         if method == "GET" and path == "/api/integrations/odds/nfl":
             return {"games": OddsClient().fetch_nfl_odds()}
@@ -212,23 +277,74 @@ class FantasyHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def enrich_keeper(keeper: Keeper) -> dict[str, Any]:
-    player = players_by_id().get(keeper.player_id)
+def enrich_keeper(conn, keeper: Keeper) -> dict[str, Any]:
+    player = get_api_player(conn, keeper.player_id)
     data = keeper.to_dict()
-    data["player"] = player.to_dict() if player else None
+    data["player"] = player
     return data
 
 
-def enrich_pick(pick: DraftPick) -> dict[str, Any]:
-    player = players_by_id().get(pick.player_id)
+def enrich_pick(conn, pick: DraftPick) -> dict[str, Any]:
+    player = get_api_player(conn, pick.player_id)
     data = pick.to_dict()
-    data["player"] = player.to_dict() if player else None
+    data["player"] = player
     return data
 
 
-def validate_player_id(player_id: str) -> None:
-    if player_id not in players_by_id():
+def get_api_player(conn, player_id: str) -> dict[str, Any] | None:
+    row = db.get_player_row(conn, player_id)
+    if row:
+        return db.player_row_to_api(row)
+    sample = players_by_id().get(player_id)
+    return sample.to_dict() if sample else None
+
+
+def validate_player_id(conn, player_id: str) -> None:
+    if not db.get_player_row(conn, player_id) and player_id not in players_by_id():
         raise ValueError(f"Unknown player_id: {player_id}")
+
+
+def enriched_sleeper_trending(
+    conn,
+    trend_type: str = "add",
+    limit: int = 25,
+    lookback_hours: int = 24,
+) -> dict[str, Any]:
+    trending = SleeperClient().trending(trend_type=trend_type, lookback_hours=lookback_hours, limit=limit)
+    players: list[dict[str, Any]] = []
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in trending:
+        sleeper_id = str(item.get("player_id") or "")
+        row = db.get_player_by_sleeper_id(conn, sleeper_id)
+        player = db.player_row_to_api(row) if row else {
+            "id": f"sleeper_{sleeper_id}",
+            "internal_player_id": f"sleeper_{sleeper_id}",
+            "sleeper_id": sleeper_id,
+            "name": f"Sleeper player {sleeper_id}",
+            "full_name": f"Sleeper player {sleeper_id}",
+            "position": "",
+            "team": "",
+        }
+        consensus = get_consensus_for_player(conn, player["internal_player_id"]) if row else None
+        entry = {
+            "player": player,
+            "trend_count": item.get("count"),
+            "consensus": consensus["consensus"] if consensus else None,
+            "sources": consensus["sources"] if consensus else {},
+            "why": [
+                f"Trending {trend_type} count: {item.get('count', 0)} over the last {lookback_hours} hours.",
+                "Matched to local player database." if row else "Import Sleeper players to enrich this result.",
+            ],
+        }
+        players.append(entry)
+        position = player.get("position") or "UNK"
+        groups.setdefault(position, []).append(entry)
+    return {
+        "trend_type": trend_type,
+        "lookback_hours": lookback_hours,
+        "players": players,
+        "groups": groups,
+    }
 
 
 def import_sleeper_settings(conn, snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -242,7 +358,7 @@ def import_sleeper_settings(conn, snapshot: dict[str, Any]) -> dict[str, Any]:
         normalized = "DEF" if position in {"DST", "DEF"} else position
         slots[normalized] = slots.get(normalized, 0) + 1
     payload = {
-            "teams": league.get("total_rosters") or 10,
+        "teams": league.get("total_rosters") or 10,
         "scoring": scoring_label,
     }
     if slots:
@@ -281,6 +397,18 @@ def optional_int(value: Any) -> int | None:
     if value in {None, ""}:
         return None
     return int(value)
+
+
+def optional_query_int(value: str | None) -> int | None:
+    if value in {None, ""}:
+        return None
+    return int(value)
+
+
+def bool_query(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value not in {"0", "false", "False", "no", "No"}
 
 
 def run() -> None:

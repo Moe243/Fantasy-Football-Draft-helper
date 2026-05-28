@@ -5,6 +5,7 @@ const state = {
   picks: [],
   recommendations: [],
   waiverGroups: {},
+  playerSource: "sample",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -23,22 +24,22 @@ async function api(path, options = {}) {
 }
 
 async function loadAll() {
-  const [players, settings, keepers, picks, draft, waivers] = await Promise.all([
+  const [players, settings, keepers, picks, draft] = await Promise.all([
     api("/api/players"),
     api("/api/league/settings"),
     api("/api/keepers"),
     api("/api/draft/picks"),
     api("/api/draft/recommendations"),
-    api("/api/waivers/rising?positions=QB,RB,WR,TE,DEF,K"),
   ]);
   state.players = players.players;
+  state.playerSource = players.source;
   state.settings = settings;
   state.keepers = keepers.keepers;
   state.picks = picks.picks;
   state.recommendations = draft.recommendations;
   state.currentPick = draft.current_pick;
-  state.waiverGroups = waivers.groups;
   renderAll();
+  await refreshWaivers();
 }
 
 function renderAll() {
@@ -62,7 +63,7 @@ function renderStatus() {
 
 function renderPlayerOptions() {
   $("#player-options").innerHTML = state.players
-    .map((player) => `<option value="${escapeHtml(player.name)}">${player.position} · ${player.team}</option>`)
+    .map((player) => `<option value="${escapeHtml(player.name || player.full_name)}">${player.position} · ${player.team}</option>`)
     .join("");
 }
 
@@ -75,24 +76,26 @@ function renderRecommendations() {
   container.innerHTML = state.recommendations
     .map((item) => {
       const player = item.player;
-      const risk = player.injury_status && player.injury_status !== "Healthy"
+      const playerName = player.name || player.full_name;
+      const risk = player.injury_status && !["Healthy", "Active"].includes(player.injury_status)
         ? `<span class="tag risk">${escapeHtml(player.injury_status)}</span>`
         : "";
       return `
         <article class="recommendation-card">
           <div>
             <div class="player-title">
-              <strong>${escapeHtml(player.name)}</strong>
+              <strong>${escapeHtml(playerName)}</strong>
               <span class="tag position">${player.position} · ${player.team}</span>
               <span class="tag fit">${escapeHtml(item.fit)}</span>
               ${risk}
             </div>
+            ${renderConsensusGrid(item)}
             <ul class="reason-list">
               ${item.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}
             </ul>
             <div class="card-actions">
-              <button class="small-button" data-draft-me="${player.id}">Draft to me</button>
-              <button class="small-button" data-draft-taken="${player.id}">Mark taken</button>
+              <button class="small-button" data-draft-me="${player.id || player.internal_player_id}">Draft to me</button>
+              <button class="small-button" data-draft-taken="${player.id || player.internal_player_id}">Mark taken</button>
             </div>
           </div>
           <div class="score-box">
@@ -103,6 +106,33 @@ function renderRecommendations() {
       `;
     })
     .join("");
+}
+
+function renderConsensusGrid(item) {
+  if (!item.consensus) return "";
+  const consensus = item.consensus;
+  return `
+    <div class="consensus-grid">
+      ${metricCell("Consensus", formatMetric(consensus.consensus_rank))}
+      ${metricCell("Sleeper ADP", formatMetric(consensus.sleeper_adp))}
+      ${metricCell("FantasyPros", formatMetric(consensus.fantasypros_rank))}
+      ${metricCell("ESPN", formatMetric(consensus.espn_rank))}
+      ${metricCell("Projected", formatMetric(consensus.projected_points_avg))}
+      ${metricCell("Label", consensus.label || "None")}
+      ${metricCell("Sources", consensus.source_count ?? 0)}
+      ${metricCell("Spread", formatMetric(consensus.rank_spread))}
+    </div>
+  `;
+}
+
+function metricCell(label, value) {
+  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function formatMetric(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  return String(value);
 }
 
 function renderPicks() {
@@ -116,7 +146,7 @@ function renderPicks() {
     .map((pick) => `
       <div class="compact-row">
         <div>
-          <strong>${pick.pick_no}. ${escapeHtml(pick.player?.name || pick.player_id)}</strong>
+          <strong>${pick.pick_no}. ${escapeHtml(pick.player?.name || pick.player?.full_name || pick.player_id)}</strong>
           <span>${escapeHtml(pick.manager)} · ${escapeHtml(pick.player?.position || "")}</span>
         </div>
         <button class="text-button" data-remove-pick="${pick.pick_no}">Remove</button>
@@ -139,7 +169,7 @@ function renderKeepers() {
       return `
         <div class="compact-row">
           <div>
-            <strong>${escapeHtml(keeper.player?.name || keeper.player_id)}</strong>
+            <strong>${escapeHtml(keeper.player?.name || keeper.player?.full_name || keeper.player_id)}</strong>
             <span>${escapeHtml(keeper.team_name)}${cost ? ` · ${escapeHtml(cost)}` : ""}</span>
           </div>
           <button class="text-button" data-remove-keeper="${keeper.player_id}" data-team="${escapeHtml(keeper.team_name)}">Remove</button>
@@ -168,14 +198,16 @@ function renderWaivers() {
 
 function waiverCard(item) {
   const player = item.player;
+  const why = item.why || [];
   return `
     <article class="waiver-card">
       <div class="player-title">
-        <strong>${escapeHtml(player.name)}</strong>
-        <span class="tag position">${player.team}</span>
+        <strong>${escapeHtml(player.name || player.full_name)}</strong>
+        <span class="tag position">${escapeHtml(player.position || "UNK")} · ${escapeHtml(player.team || "")}</span>
       </div>
-      <p>${escapeHtml(item.why[0])}</p>
-      <p>${escapeHtml(item.why[2])}</p>
+      ${item.trend_count !== undefined ? `<p>${escapeHtml(`Sleeper trend count: ${item.trend_count}`)}</p>` : ""}
+      ${why.filter(Boolean).map((reason) => `<p>${escapeHtml(reason)}</p>`).join("")}
+      ${item.consensus?.label ? `<p>${escapeHtml(`Consensus label: ${item.consensus.label}`)}</p>` : ""}
     </article>
   `;
 }
@@ -186,8 +218,8 @@ function emptyState(text) {
 
 function findPlayerByName(name) {
   const normalized = normalize(name);
-  return state.players.find((player) => normalize(player.name) === normalized)
-    || state.players.find((player) => normalize(player.name).includes(normalized));
+  return state.players.find((player) => normalize(player.name || player.full_name) === normalized)
+    || state.players.find((player) => normalize(player.name || player.full_name).includes(normalized));
 }
 
 function normalize(value) {
@@ -198,7 +230,7 @@ async function refreshDraft() {
   const [picks, keepers, draft] = await Promise.all([
     api("/api/draft/picks"),
     api("/api/keepers"),
-    api("/api/draft/recommendations"),
+    api(`/api/draft/recommendations?${draftQueryString()}`),
   ]);
   state.picks = picks.picks;
   state.keepers = keepers.keepers;
@@ -211,9 +243,39 @@ async function refreshDraft() {
 }
 
 async function refreshWaivers() {
-  const waivers = await api("/api/waivers/rising?positions=QB,RB,WR,TE,DEF,K");
-  state.waiverGroups = waivers.groups;
+  try {
+    const waivers = await api("/api/integrations/sleeper/trending/enriched?limit=25");
+    state.waiverGroups = waivers.groups;
+  } catch (error) {
+    const waivers = await api("/api/waivers/rising?positions=QB,RB,WR,TE,DEF,K");
+    state.waiverGroups = waivers.groups;
+  }
   renderWaivers();
+}
+
+async function refreshPlayers() {
+  const query = new URLSearchParams();
+  const position = $("#draft-position-filter")?.value;
+  const search = $("#draft-search-filter")?.value.trim();
+  if (position) query.set("position", position);
+  if (search) query.set("search", search);
+  query.set("active", "1");
+  const players = await api(`/api/players?${query.toString()}`);
+  state.players = players.players;
+  state.playerSource = players.source;
+  renderPlayerOptions();
+}
+
+function draftQueryString() {
+  const query = new URLSearchParams();
+  query.set("limit", "12");
+  const position = $("#draft-position-filter")?.value;
+  const search = $("#draft-search-filter")?.value.trim();
+  if (position) query.set("position", position);
+  if (search) query.set("search", search);
+  query.set("hide_drafted", $("#hide-drafted-filter")?.checked ? "1" : "0");
+  query.set("hide_keepers", $("#hide-keepers-filter")?.checked ? "1" : "0");
+  return query.toString();
 }
 
 function setActiveTab(tab) {
@@ -280,6 +342,28 @@ document.addEventListener("click", async (event) => {
   if (target.id === "refresh-waivers") {
     await refreshWaivers();
     toast("Waiver watchlist refreshed.");
+    return;
+  }
+
+  if (target.id === "import-sleeper-players") {
+    target.disabled = true;
+    target.textContent = "Importing...";
+    try {
+      const result = await api("/api/integrations/sleeper/players/import", { method: "POST" });
+      await refreshPlayers();
+      await refreshDraft();
+      toast(`Imported ${result.imported_count} Sleeper players.`);
+    } finally {
+      target.disabled = false;
+      target.textContent = "Import Sleeper Players";
+    }
+    return;
+  }
+
+  if (target.id === "refresh-consensus") {
+    const result = await api(`/api/players/consensus?limit=25&current_pick=${encodeURIComponent(state.currentPick || 1)}`);
+    await refreshDraft();
+    toast(`Consensus refreshed for ${result.players.length} players.`);
     return;
   }
 
@@ -397,6 +481,52 @@ $("#sleeper-form").addEventListener("submit", async (event) => {
   await refreshDraft();
   toast(`Imported ${result.snapshot.name || "Sleeper league"}.`);
 });
+
+$("#rankings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  let parsed;
+  try {
+    parsed = JSON.parse($("#rankings-json").value);
+  } catch (error) {
+    toast("Rankings JSON is not valid.");
+    return;
+  }
+  const rows = Array.isArray(parsed) ? parsed : parsed.rows;
+  if (!Array.isArray(rows)) {
+    toast("Rankings JSON must be an array or an object with rows.");
+    return;
+  }
+  const result = await api("/api/rankings/import/csv", {
+    method: "POST",
+    body: JSON.stringify({
+      source_name: $("#rankings-source").value,
+      rows,
+    }),
+  });
+  await refreshPlayers();
+  await refreshDraft();
+  toast(`Imported ${result.imported_count} ${result.source_name} rankings.`);
+});
+
+["draft-position-filter", "hide-drafted-filter", "hide-keepers-filter"].forEach((id) => {
+  $(`#${id}`).addEventListener("change", async () => {
+    await refreshPlayers();
+    await refreshDraft();
+  });
+});
+
+$("#draft-search-filter").addEventListener("input", debounce(async () => {
+  await refreshPlayers();
+  await refreshDraft();
+}, 250));
+
+function debounce(callback, wait) {
+  let timeout;
+  return (...args) => {
+    window.clearTimeout(timeout);
+    timeout = window.setTimeout(() => callback(...args), wait);
+  };
+}
 
 $("#chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();

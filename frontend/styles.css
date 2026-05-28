@@ -370,7 +370,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -378,6 +379,72 @@ select {
   background: #fffefb;
   color: var(--ink);
   padding: 9px 11px;
+}
+
+textarea {
+  min-height: 170px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: 130px minmax(180px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.checkbox-label input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.full-width-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.consensus-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.consensus-grid div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #fffdf7;
+}
+
+.consensus-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.consensus-grid strong {
+  display: block;
+  margin-top: 3px;
 }
 
 .list-head {
@@ -519,7 +586,9 @@ select {
   }
 
   .form-row,
-  .keeper-panel .form-row {
+  .keeper-panel .form-row,
+  .filter-bar,
+  .consensus-grid {
     grid-template-columns: 1fr;
   }
 

@@ -62,6 +62,32 @@
                 </div>
                 <span id="current-pick" class="metric-chip">Pick 1</span>
               </div>
+              <div class="filter-bar" aria-label="Draft board filters">
+                <label>
+                  Position
+                  <select id="draft-position-filter">
+                    <option value="">All</option>
+                    <option value="QB">QB</option>
+                    <option value="RB">RB</option>
+                    <option value="WR">WR</option>
+                    <option value="TE">TE</option>
+                    <option value="DEF">DEF</option>
+                    <option value="K">K</option>
+                  </select>
+                </label>
+                <label>
+                  Search
+                  <input id="draft-search-filter" placeholder="Player name" />
+                </label>
+                <label class="checkbox-label">
+                  <input id="hide-drafted-filter" type="checkbox" checked />
+                  Hide drafted
+                </label>
+                <label class="checkbox-label">
+                  <input id="hide-keepers-filter" type="checkbox" checked />
+                  Hide keepers
+                </label>
+              </div>
               <div id="recommendations" class="recommendation-list"></div>
             </section>
 
@@ -183,7 +209,38 @@
                 </label>
                 <button type="submit" class="primary-button">Import League</button>
               </form>
+              <button type="button" class="ghost-button full-width-button" id="import-sleeper-players">Import Sleeper Players</button>
               <p class="helper-copy">Sleeper can import league settings, rosters, users, draft metadata, and picks. Manual keeper entry stays available when keeper slots are not encoded cleanly.</p>
+            </section>
+
+            <section class="panel">
+              <h3>Rankings JSON</h3>
+              <form id="rankings-form" class="stack-form">
+                <label>
+                  Source name
+                  <input id="rankings-source" value="fantasypros" />
+                </label>
+                <label>
+                  Rows JSON
+                  <textarea id="rankings-json" rows="9" spellcheck="false">[
+  {
+    "player_name": "Ja'Marr Chase",
+    "team": "CIN",
+    "position": "WR",
+    "overall_rank": 2,
+    "position_rank": "WR1",
+    "adp": 2.6,
+    "projected_points": 304.8,
+    "tier": 1,
+    "bye_week": 10
+  }
+]</textarea>
+                </label>
+                <div class="button-row">
+                  <button type="submit" class="primary-button">Import Rankings JSON</button>
+                  <button type="button" class="ghost-button" id="refresh-consensus">Refresh Consensus</button>
+                </div>
+              </form>
             </section>
 
             <section class="panel keeper-panel">

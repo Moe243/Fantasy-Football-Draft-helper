@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import asdict
 import re
+import sqlite3
 from typing import Any
 
 from ..models import DraftPick, Keeper, LeagueSettings, Player, Recommendation
 from ..sample_data import SAMPLE_PLAYERS, players_by_id
+from .consensus import get_consensus_rows
+from .normalization import normalize_name, normalize_position
 
 
 FANTASY_POSITIONS = ("QB", "RB", "WR", "TE", "DEF", "K")
@@ -62,6 +65,27 @@ def roster_counts(picks: list[DraftPick], manager: str = "me") -> Counter[str]:
     for pick in picks:
         if pick.manager.lower() == manager.lower() and pick.player_id in by_id:
             counts[by_id[pick.player_id].position] += 1
+    return counts
+
+
+def database_roster_counts(
+    conn: sqlite3.Connection,
+    picks: list[DraftPick],
+    manager: str = "me",
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    player_ids = [pick.player_id for pick in picks if pick.manager.lower() == manager.lower()]
+    if not player_ids:
+        return counts
+    placeholders = ",".join("?" for _ in player_ids)
+    rows = conn.execute(
+        f"SELECT internal_player_id, position FROM players WHERE internal_player_id IN ({placeholders})",
+        player_ids,
+    ).fetchall()
+    by_id = {row["internal_player_id"]: row["position"] for row in rows}
+    for pick in picks:
+        if pick.manager.lower() == manager.lower() and pick.player_id in by_id:
+            counts[by_id[pick.player_id]] += 1
     return counts
 
 
@@ -135,6 +159,174 @@ def draft_recommendations(
         score, reasons, fit = score_player(player, settings, picks, baselines, pick_number, manager=manager)
         recommendations.append(Recommendation(player=player, score=score, reasons=reasons, fit=fit))
     return sorted(recommendations, key=lambda rec: rec.score, reverse=True)[:limit]
+
+
+def database_draft_recommendations(
+    conn: sqlite3.Connection,
+    settings: LeagueSettings,
+    keepers: list[Keeper],
+    picks: list[DraftPick],
+    limit: int = 12,
+    manager: str = "me",
+    position: str | None = None,
+    search: str | None = None,
+    hide_drafted: bool = True,
+    hide_keepers: bool = True,
+) -> list[dict[str, Any]]:
+    current_pick = current_pick_number(picks, keepers)
+    consensus_rows = get_consensus_rows(
+        conn,
+        position=position,
+        limit=600,
+        current_pick=current_pick,
+    )
+    drafted_ids = {pick.player_id for pick in picks}
+    keeper_ids = {keeper.player_id for keeper in keepers}
+    normalized_search = normalize_name(search or "")
+    filtered: list[dict[str, Any]] = []
+    for row in consensus_rows:
+        player = row["player"]
+        if hide_drafted and player["internal_player_id"] in drafted_ids:
+            continue
+        if hide_keepers and player["internal_player_id"] in keeper_ids:
+            continue
+        if normalized_search and normalized_search not in normalize_name(player["full_name"]):
+            continue
+        filtered.append(row)
+
+    counts = database_roster_counts(conn, picks, manager=manager)
+    desired = desired_position_counts(settings)
+    scored = [
+        score_database_player(item, desired, counts, current_pick)
+        for item in filtered
+    ]
+    return sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]
+
+
+def score_database_player(
+    item: dict[str, Any],
+    desired: dict[str, int],
+    counts: Counter[str],
+    current_pick: int,
+) -> dict[str, Any]:
+    player = item["player"]
+    consensus = item["consensus"]
+    sources = item["sources"]
+    position = normalize_position(player.get("position") or "")
+    consensus_rank = consensus.get("consensus_rank")
+    projected_points = consensus.get("projected_points_avg") or 0.0
+    source_adps = [
+        source.get("adp")
+        for source in sources.values()
+        if source.get("adp") is not None
+    ]
+    avg_adp = sum(float(value) for value in source_adps) / len(source_adps) if source_adps else None
+    value_vs_rank = (current_pick - consensus_rank) if consensus_rank is not None else 0.0
+    value_vs_adp = (current_pick - avg_adp) if avg_adp is not None else 0.0
+    need_gap = desired.get(position, 0) - counts.get(position, 0)
+    need_bonus = 22.0 if need_gap > 0 else -6.0
+    if position in {"DEF", "K"} and current_pick < 120:
+        need_bonus -= 22.0
+    scarcity_bonus = {"RB": 16.0, "WR": 14.0, "TE": 10.0, "QB": 7.0, "DEF": 0.0, "K": 0.0}.get(position, 0.0)
+    injury_text = str(player.get("injury_status") or player.get("status") or "")
+    injury_penalty = 18.0 if injury_text and injury_text.lower() not in {"healthy", "active"} else 0.0
+    disagreement = consensus.get("disagreement_score") or 0.0
+    disagreement_adjustment = 5.0 if disagreement >= 20 and value_vs_rank >= 8 else -3.0 if disagreement >= 20 else 0.0
+    rank_component = max(0.0, 220.0 - float(consensus_rank or 220.0)) * 0.55
+    score = (
+        rank_component
+        + projected_points * 0.24
+        + value_vs_rank * 2.8
+        + value_vs_adp * 1.7
+        + need_bonus
+        + scarcity_bonus
+        + disagreement_adjustment
+        - injury_penalty
+    )
+    reasons = database_reasons(
+        player,
+        consensus,
+        sources,
+        current_pick,
+        value_vs_rank,
+        value_vs_adp,
+        need_gap,
+        injury_text,
+    )
+    item = dict(item)
+    item["score"] = round(score, 2)
+    item["fit"] = fit_label(score)
+    item["reasons"] = reasons
+    return item
+
+
+def database_reasons(
+    player: dict[str, Any],
+    consensus: dict[str, Any],
+    sources: dict[str, dict[str, Any]],
+    current_pick: int,
+    value_vs_rank: float,
+    value_vs_adp: float,
+    need_gap: int,
+    injury_text: str,
+) -> list[str]:
+    reasons: list[str] = []
+    label = consensus.get("label")
+    if label == "Undervalued" and value_vs_rank >= 8:
+        reasons.append(f"He is available {round(value_vs_rank)} picks after his consensus rank.")
+    elif label == "Overpriced" and value_vs_rank <= -8:
+        reasons.append(f"He is going {abs(round(value_vs_rank))} picks earlier than consensus value.")
+    elif consensus.get("consensus_rank") is not None:
+        reasons.append(f"Consensus rank is {consensus['consensus_rank']} at current pick {current_pick}.")
+    if value_vs_adp >= 8:
+        reasons.append(f"He is available {round(value_vs_adp)} picks after imported ADP.")
+    if need_gap > 0:
+        reasons.append(f"You still need a starting {player.get('position')}.")
+    disagreement_reason = source_disagreement_reason(sources)
+    if disagreement_reason:
+        reasons.append(disagreement_reason)
+    if (consensus.get("disagreement_score") or 0) >= 20:
+        reasons.append("High source disagreement, so this is a risk/reward pick.")
+    if injury_text and injury_text.lower() not in {"healthy", "active"}:
+        reasons.append("Injury status should be monitored.")
+    if consensus.get("projected_points_avg") is not None:
+        reasons.append(f"Average imported projection is {consensus['projected_points_avg']} points.")
+    return reasons[:6] or ["Imported consensus data makes him one of the better available fits."]
+
+
+def source_disagreement_reason(sources: dict[str, dict[str, Any]]) -> str | None:
+    source_ranks: list[tuple[str, float]] = []
+    for source_name, source in sources.items():
+        rank = source.get("overall_rank") if source.get("overall_rank") is not None else source.get("adp")
+        if rank is not None:
+            source_ranks.append((source_name, float(rank)))
+    if len(source_ranks) < 2:
+        return None
+    high_source, high_rank = min(source_ranks, key=lambda item: item[1])
+    low_source, low_rank = max(source_ranks, key=lambda item: item[1])
+    spread = low_rank - high_rank
+    if spread < 8:
+        return None
+    return f"{display_source(high_source)} is higher on him than {display_source(low_source)} by {round(spread)} picks."
+
+
+def display_source(source_name: str) -> str:
+    names = {
+        "fantasypros": "FantasyPros",
+        "espn": "ESPN",
+        "sleeper": "Sleeper",
+    }
+    return names.get(source_name, source_name.replace("_", " ").title())
+
+
+def fit_label(score: float) -> str:
+    if score >= 140:
+        return "Priority target"
+    if score >= 95:
+        return "Strong fit"
+    if score >= 55:
+        return "Consider"
+    return "Watch list"
 
 
 def waiver_risers(
