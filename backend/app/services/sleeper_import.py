@@ -91,6 +91,15 @@ def build_player_payload(sleeper_id: str, raw: dict[str, Any]) -> dict[str, Any]
         "status": clean(raw.get("status")),
         "injury_status": clean(raw.get("injury_status")),
         "search_rank": raw.get("search_rank"),
+        "jersey_number": clean(raw.get("number")),
+        "height": clean(raw.get("height")),
+        "weight": clean(raw.get("weight")),
+        "college": clean(raw.get("college")),
+        "birth_date": clean(raw.get("birth_date")),
+        "depth_chart_position": clean(raw.get("depth_chart_position")),
+        "depth_chart_order": raw.get("depth_chart_order"),
+        "news_updated_at": clean(raw.get("news_updated")),
+        "raw_json": json.dumps(raw),
         "source": "sleeper",
     }
 

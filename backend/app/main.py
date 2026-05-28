@@ -18,7 +18,20 @@ from .providers.odds import OddsClient
 from .providers.rankings_csv import import_ranking_rows
 from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
+from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
+from .services.data_imports import import_prop_rows, import_stat_rows
+from .services.draft_board import get_draft_board
+from .services.league_import import import_sleeper_league, set_my_team
+from .services.player_detail import player_detail, search_players
+from .services.practice_draft import (
+    get_current_practice,
+    make_user_pick,
+    reset_practice,
+    simulate_next,
+    simulate_to_my_next_pick,
+    start_practice,
+)
 from .services.recommendations import (
     chat_response,
     current_pick_number,
@@ -27,6 +40,7 @@ from .services.recommendations import (
     waiver_risers,
 )
 from .services.sleeper_import import import_sleeper_players
+from .services.startup import ensure_sleeper_players
 
 
 def json_default(value: Any) -> Any:
@@ -80,6 +94,15 @@ class FantasyHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/health":
             return {"ok": True, "app": settings.app_name}
 
+        if method == "GET" and path == "/api/setup/status":
+            latest_players = db.latest_import_run(conn, "sleeper", "players")
+            league_id = first(query, "league_id")
+            return {
+                "players_loaded": db.count_players_by_source(conn, "sleeper"),
+                "latest_player_import": dict(latest_players) if latest_players else None,
+                "league": league_status(conn, league_id) if league_id else None,
+            }
+
         if method == "GET" and path == "/api/architecture":
             return {
                 "stack": {
@@ -101,6 +124,24 @@ class FantasyHandler(BaseHTTPRequestHandler):
             players, source = db.get_players_for_api(conn, position=position, search=search, active=active)
             return {"players": players, "source": source}
 
+        if method == "GET" and path == "/api/players/search":
+            return search_players(
+                conn,
+                search=first(query, "search"),
+                position=first(query, "position"),
+                team=first(query, "team"),
+                age_min=optional_query_int(first(query, "age_min")),
+                age_max=optional_query_int(first(query, "age_max")),
+                number=first(query, "number"),
+                active=optional_query_int(first(query, "active")),
+                limit=int(first(query, "limit") or "50"),
+                offset=int(first(query, "offset") or "0"),
+                sort=first(query, "sort"),
+            )
+
+        if method == "GET" and path == "/api/players/detail":
+            return player_detail(conn, require_query(query, "player_id"))
+
         if method == "GET" and path == "/api/players/consensus":
             position = first(query, "position")
             limit = int(first(query, "limit") or "100")
@@ -120,6 +161,16 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 return settings_record.to_dict()
             if method == "POST":
                 return db.update_league_settings(conn, self.read_json()).to_dict()
+
+        if method == "GET" and path == "/api/league/managers":
+            league_id = require_query(query, "league_id")
+            return {"managers": league_managers(conn, league_id)}
+
+        if method == "POST" and path == "/api/league/my-team":
+            payload = self.read_json()
+            league_id = require(payload, "league_id")
+            roster_id = int(require(payload, "roster_id"))
+            return {"my_team": dict(set_my_team(conn, league_id, roster_id))}
 
         if path == "/api/keepers":
             if method == "GET":
@@ -194,6 +245,15 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 "recommendations": [rec.to_dict() for rec in recs],
             }
 
+        if method == "GET" and path == "/api/draft/board":
+            league_id = require_query(query, "league_id")
+            return get_draft_board(conn, league_id)
+
+        if method == "GET" and path == "/api/draft/availability":
+            league_id = require_query(query, "league_id")
+            pick_no = int(require_query(query, "pick_no"))
+            return estimate_availability(conn, league_id, pick_no)
+
         if method == "GET" and path == "/api/waivers/rising":
             positions_raw = first(query, "positions")
             positions = [item.strip().upper() for item in positions_raw.split(",")] if positions_raw else None
@@ -214,9 +274,8 @@ class FantasyHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/integrations/sleeper/import":
             payload = self.read_json()
             league_id = require(payload, "league_id")
-            snapshot = SleeperClient().fetch_league_snapshot(league_id)
-            imported = import_sleeper_settings(conn, snapshot)
-            return {"imported": imported, "snapshot": summarize_sleeper_snapshot(snapshot)}
+            imported = import_sleeper_league(conn, league_id)
+            return {"imported": imported, "snapshot": imported}
 
         if method == "POST" and path == "/api/integrations/sleeper/players/import":
             players = SleeperClient().players("nfl")
@@ -240,6 +299,41 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 raise ValueError("rows must be a list")
             source_name = require(payload, "source_name")
             return import_ranking_rows(conn, source_name, rows)
+
+        if method == "POST" and path == "/api/player-stats/import/json":
+            payload = self.read_json()
+            rows = payload.get("rows")
+            if not isinstance(rows, list):
+                raise ValueError("rows must be a list")
+            return import_stat_rows(conn, require(payload, "source_name"), rows)
+
+        if method == "POST" and path == "/api/player-props/import/json":
+            payload = self.read_json()
+            rows = payload.get("rows")
+            if not isinstance(rows, list):
+                raise ValueError("rows must be a list")
+            return import_prop_rows(conn, require(payload, "source_name"), payload.get("sportsbook"), rows)
+
+        if method == "POST" and path == "/api/practice/start":
+            payload = self.read_json()
+            return start_practice(conn, require(payload, "league_id"), payload.get("name"))
+
+        if method == "GET" and path == "/api/practice/current":
+            return get_current_practice(conn, require_query(query, "league_id"))
+
+        if method == "POST" and path == "/api/practice/pick":
+            payload = self.read_json()
+            return make_user_pick(conn, require(payload, "league_id"), require(payload, "player_id"))
+
+        if method == "POST" and path == "/api/practice/simulate-next":
+            return simulate_next(conn, require(self.read_json(), "league_id"))
+
+        if method == "POST" and path == "/api/practice/simulate-to-my-next-pick":
+            return simulate_to_my_next_pick(conn, require(self.read_json(), "league_id"))
+
+        if method == "DELETE" and path == "/api/practice/reset":
+            league_id = require_query(query, "league_id")
+            return reset_practice(conn, league_id)
 
         if method == "GET" and path == "/api/integrations/odds/nfl":
             return {"games": OddsClient().fetch_nfl_odds()}
@@ -381,6 +475,30 @@ def summarize_sleeper_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def league_managers(conn, league_id: str) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM league_managers WHERE league_id = ? ORDER BY roster_id",
+            (league_id,),
+        ).fetchall()
+    ]
+
+
+def league_status(conn, league_id: str | None) -> dict[str, Any] | None:
+    if not league_id:
+        return None
+    league = conn.execute("SELECT * FROM sleeper_leagues WHERE league_id = ?", (league_id,)).fetchone()
+    if not league:
+        return None
+    counts = {
+        "managers_imported": conn.execute("SELECT COUNT(*) AS count FROM league_managers WHERE league_id = ?", (league_id,)).fetchone()["count"],
+        "drafts_imported": conn.execute("SELECT COUNT(*) AS count FROM league_drafts WHERE league_id = ?", (league_id,)).fetchone()["count"],
+        "draft_picks_imported": conn.execute("SELECT COUNT(*) AS count FROM league_draft_picks WHERE league_id = ?", (league_id,)).fetchone()["count"],
+    }
+    return {"league": dict(league), **counts}
+
+
 def first(query: dict[str, list[str]], name: str) -> str | None:
     values = query.get(name)
     return values[0] if values else None
@@ -391,6 +509,13 @@ def require(payload: dict[str, Any], name: str) -> str:
     if value is None or value == "":
         raise ValueError(f"{name} is required")
     return str(value)
+
+
+def require_query(query: dict[str, list[str]], name: str) -> str:
+    value = first(query, name)
+    if value is None or value == "":
+        raise ValueError(f"{name} is required")
+    return value
 
 
 def optional_int(value: Any) -> int | None:
@@ -414,6 +539,9 @@ def bool_query(value: str | None, default: bool) -> bool:
 def run() -> None:
     with db.connect() as conn:
         db.init_db(conn)
+        result = ensure_sleeper_players(conn)
+        if result.get("status") in {"success", "error"}:
+            print(f"Sleeper player startup import: {result}")
     server = ThreadingHTTPServer((settings.host, settings.port), FantasyHandler)
     print(f"{settings.app_name} running at http://{settings.host}:{settings.port}")
     server.serve_forever()

@@ -1,6 +1,6 @@
 # Fantasy Football Chatbot
 
-A local-first MVP for a fantasy football draft and roster assistant. It has a working browser UI, a Python API, SQLite persistence, a recommendation engine, Sleeper integration hooks, manual keeper input, waiver riser rankings, and a simple explainable chatbot route.
+A local-first MVP for a fantasy football draft and roster assistant. It has a working browser UI, a Python API, SQLite persistence, a recommendation engine, Sleeper league/player imports, a real draft-board view, a practice draft simulator, a full Players tab, waiver riser rankings, and a simple explainable chatbot route.
 
 ## Recommended Stack
 
@@ -21,8 +21,8 @@ Recommended source strategy:
 
 - **Sleeper:** Primary league integration. Use it for users, leagues, rosters, drafts, draft picks, players, and trending adds/drops.
 - **Projection/ranking feeds:** Import rankings/projections as JSON rows first, then add paid or licensed sources for current projections, ADP, weekly ranks, injuries, depth charts, snap counts, and route data.
-- **Odds feed:** Use The Odds API or a similar provider for spreads, totals, moneylines, implied team totals, and line movement.
-- **ESPN/NFL.com:** Treat these as optional adapters. Do not make them core dependencies unless you have authenticated, licensed, or otherwise stable access.
+- **Odds and props feeds:** Use The Odds API or a similar licensed provider for sportsbook lines, props, spreads, totals, implied team totals, and line movement.
+- **ESPN, DraftKings, FanDuel, Caesars, Draft365:** Represented as adapters or importable source names. If a source has no clean public API configured, the adapter returns a clear "not configured" message instead of scraping or crashing.
 
 Useful docs:
 
@@ -56,6 +56,10 @@ The MVP stores league state plus normalized multi-source player data:
 - `players`: canonical player identities, using Sleeper as the primary identity source.
 - `player_source_rankings`: imported source rankings, ADP, projections, tiers, bye weeks, and raw JSON.
 - `source_import_runs`: import status, counts, and error tracking.
+- `sleeper_leagues`, `league_managers`, `league_drafts`, `league_draft_picks`, `draft_slots`, `user_draft_picks`: imported Sleeper league context for the real draft board.
+- `manager_draft_tendencies`: simple league-mate draft history tendencies by round and position.
+- `practice_drafts`, `practice_draft_picks`: saved local practice draft state.
+- `player_stat_lines`, `player_props`, `player_news`: optional imported player detail data.
 
 Production should add:
 
@@ -69,6 +73,8 @@ python3 -m backend.app.main
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
+On startup the server initializes SQLite and checks for Sleeper-sourced players. If none exist, or if the last Sleeper player import is older than the refresh window, it imports the fantasy-relevant NFL player pool automatically. The Setup button is still available as **Refresh Sleeper Players** for manual refreshes.
+
 ## Test
 
 ```bash
@@ -77,26 +83,38 @@ python3 -m unittest discover backend/tests
 
 ## MVP Workflow
 
-1. Set league settings in the Setup tab.
-2. Click **Import Sleeper Players** to load the real NFL player pool into SQLite.
-3. Import rankings/projections JSON from FantasyPros, ESPN, or another source.
-4. Add manual keepers if Sleeper keeper data is incomplete.
-5. Use the Draft Board to mark picks as they happen.
-6. Ask the chatbot draft, keeper, waiver, and matchup questions.
-7. Use the Waivers tab to pull enriched Sleeper trending adds when player data is imported.
+1. Run the app. Sleeper players auto-load if missing.
+2. Enter a Sleeper league ID in Setup and click **Import League**.
+3. The app imports league settings, managers, rosters, drafts, draft picks, draft order, available traded-pick data, and recent discoverable draft history.
+4. If the app cannot know which roster is yours, choose it from **My Team** and save it.
+5. Use the Draft Board tab to see the full manager-by-round grid, highlighted picks, upcoming picks, likely available players, and best available recommendations.
+6. Use the Practice tab to start a draft, simulate opponent picks, simulate to your next pick, make your pick, and reset.
+7. Use the Players tab to search/filter the player database and open a detail view with profile, rankings, stats, projections, props, news, and notes.
+8. Import rankings, stats, or props JSON when a provider does not have a configured official/licensed API.
+9. Ask the chatbot draft, keeper, waiver, and matchup questions.
+10. Use the Waivers tab to pull enriched Sleeper trending adds when player data is imported.
 
 ## Multi-Source Endpoints
 
 - `POST /api/integrations/sleeper/players/import`: imports all fantasy-relevant NFL players from Sleeper.
+- `POST /api/integrations/sleeper/import`: imports Sleeper league settings, managers, rosters, drafts, picks, and draft order.
 - `GET /api/players?position=RB&search=chase&active=1`: reads database players first, then falls back to seed data.
+- `GET /api/players/search?position=WR&team=CIN&search=chase`: searches the player database with filters.
+- `GET /api/players/detail?player_id=sleeper_...`: returns profile, rankings, stats, props, news, and notes.
 - `POST /api/rankings/import/csv`: imports JSON ranking rows under a source name.
+- `POST /api/player-stats/import/json`: imports actual/projected/career stat lines.
+- `POST /api/player-props/import/json`: imports sportsbook player prop lines.
 - `GET /api/players/consensus?position=RB&limit=100&current_pick=25`: compares available source rankings.
+- `GET /api/draft/board?league_id=...`: returns the Sleeper league draft grid, managers, my team, my picks, and likely available players.
+- `GET /api/draft/availability?league_id=...&pick_no=25`: estimates which players may last to a future pick.
+- `POST /api/practice/start`, `POST /api/practice/simulate-next`, `POST /api/practice/simulate-to-my-next-pick`, `POST /api/practice/pick`, `DELETE /api/practice/reset`: manage a saved practice draft.
 - `GET /api/integrations/sleeper/trending/enriched`: enriches Sleeper trending adds with local player and consensus data.
 
 ## Next Build Steps
 
 1. Add real CSV file upload and source-specific column mapping screens.
-2. Add scheduled refreshes for Sleeper players, rankings, injuries, odds, and trending adds.
-3. Add a proper `notifications` worker that sends the weekly top-5 risers by position.
-4. Add LLM tool calling so chat answers can call `draft_recommendations`, `waiver_risers`, `evaluate_keeper`, and matchup endpoints.
-5. Add a real auth model for your league/user data before deploying beyond localhost.
+2. Add scheduled refreshes for rankings, injuries, stats, props, odds, and trending adds.
+3. Improve availability prediction with roster construction, manager tendencies, tiers, and position runs.
+4. Add a proper `notifications` worker that sends the weekly top-5 risers by position.
+5. Add LLM tool calling so chat answers can call `get_players`, `get_player_detail`, `get_draft_board`, `draft_recommendations`, `waiver_risers`, `evaluate_keeper`, and matchup endpoints.
+6. Add a real auth model for your league/user data before deploying beyond localhost.

@@ -19,6 +19,8 @@
 
         <nav class="nav-tabs" aria-label="Primary views">
           <button class="nav-tab active" data-tab="draft">Draft Board</button>
+          <button class="nav-tab" data-tab="players">Players</button>
+          <button class="nav-tab" data-tab="practice">Practice</button>
           <button class="nav-tab" data-tab="waivers">Waivers</button>
           <button class="nav-tab" data-tab="chat">Chat</button>
           <button class="nav-tab" data-tab="setup">Setup</button>
@@ -52,6 +54,26 @@
             </div>
             <button class="ghost-button" id="refresh-draft">Refresh</button>
           </div>
+
+          <section class="panel board-panel">
+            <div class="panel-head">
+              <div>
+                <h3>League Draft Board</h3>
+                <p>Teams as columns, rounds as rows, with your picks highlighted after your team is selected.</p>
+              </div>
+            </div>
+            <div id="league-draft-board" class="draft-board-grid"></div>
+          </section>
+
+          <section class="panel my-picks-panel">
+            <div class="panel-head">
+              <div>
+                <h3>My Upcoming Picks</h3>
+                <p>Likely available players are estimated from consensus rank and current board state.</p>
+              </div>
+            </div>
+            <div id="my-upcoming-picks" class="upcoming-picks"></div>
+          </section>
 
           <div class="draft-grid">
             <section class="panel recommendations-panel">
@@ -125,6 +147,57 @@
               <div id="draft-picks" class="compact-list"></div>
             </section>
           </div>
+        </section>
+
+        <section class="view" id="view-players" aria-labelledby="players-heading">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">Player database</p>
+              <h2 id="players-heading">Players</h2>
+            </div>
+            <button class="ghost-button" id="refresh-players">Refresh</button>
+          </div>
+          <section class="panel">
+            <div class="players-filter-bar">
+              <label>Search <input id="players-search" placeholder="Player name" /></label>
+              <label>Position <select id="players-position"><option value="">All</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>DEF</option><option>K</option></select></label>
+              <label>Team <input id="players-team" placeholder="CIN" /></label>
+              <label>Age min <input id="players-age-min" type="number" min="18" /></label>
+              <label>Age max <input id="players-age-max" type="number" min="18" /></label>
+              <label>Number <input id="players-number" /></label>
+              <label>Sort <select id="players-sort"><option value="rank">Rank</option><option value="name">Name</option><option value="position">Position</option><option value="team">Team</option><option value="age">Age</option></select></label>
+              <label class="checkbox-label"><input id="players-active" type="checkbox" checked />Active only</label>
+            </div>
+            <div id="players-table" class="players-table"></div>
+          </section>
+          <section class="panel player-detail-panel">
+            <div id="player-detail">Select a player to view details.</div>
+          </section>
+        </section>
+
+        <section class="view" id="view-practice" aria-labelledby="practice-heading">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">Practice room</p>
+              <h2 id="practice-heading">Practice Draft</h2>
+            </div>
+          </div>
+          <section class="panel">
+            <div class="button-row">
+              <button class="primary-button" id="practice-start">Start Practice Draft</button>
+              <button class="ghost-button" id="practice-sim-next">Simulate Next Pick</button>
+              <button class="ghost-button" id="practice-sim-mine">Simulate To My Next Pick</button>
+              <button class="ghost-button" id="practice-reset">Reset Practice Draft</button>
+            </div>
+            <form id="practice-pick-form" class="stack-form practice-pick-form">
+              <label>
+                Make Pick
+                <input list="player-options" id="practice-pick-player" placeholder="Choose player for your pick" />
+              </label>
+              <button class="primary-button" type="submit">Make Pick</button>
+            </form>
+            <div id="practice-status" class="compact-list"></div>
+          </section>
         </section>
 
         <section class="view" id="view-waivers" aria-labelledby="waiver-heading">
@@ -209,7 +282,15 @@
                 </label>
                 <button type="submit" class="primary-button">Import League</button>
               </form>
-              <button type="button" class="ghost-button full-width-button" id="import-sleeper-players">Import Sleeper Players</button>
+              <label class="team-select-wrap">
+                My Team
+                <select id="my-team-select">
+                  <option value="">Select after league import</option>
+                </select>
+              </label>
+              <button type="button" class="ghost-button full-width-button" id="save-my-team">Save My Team</button>
+              <button type="button" class="ghost-button full-width-button" id="import-sleeper-players">Refresh Sleeper Players</button>
+              <div id="import-status" class="compact-list setup-status"></div>
               <p class="helper-copy">Sleeper can import league settings, rosters, users, draft metadata, and picks. Manual keeper entry stays available when keeper slots are not encoded cleanly.</p>
             </section>
 
@@ -240,6 +321,52 @@
                   <button type="submit" class="primary-button">Import Rankings JSON</button>
                   <button type="button" class="ghost-button" id="refresh-consensus">Refresh Consensus</button>
                 </div>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h3>Stats JSON</h3>
+              <form id="stats-form" class="stack-form">
+                <label>Source name <input id="stats-source" value="espn" /></label>
+                <label>Rows JSON <textarea id="stats-json" rows="7" spellcheck="false">[
+  {
+    "player_name": "Ja'Marr Chase",
+    "team": "CIN",
+    "position": "WR",
+    "season": 2025,
+    "week": 1,
+    "stat_type": "actual",
+    "targets": 12,
+    "receptions": 8,
+    "receiving_yards": 110,
+    "receiving_tds": 1,
+    "fantasy_points": 25
+  }
+]</textarea></label>
+                <button type="submit" class="primary-button">Import Stats JSON</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h3>Props JSON</h3>
+              <form id="props-form" class="stack-form">
+                <label>Source name <input id="props-source" value="draftkings" /></label>
+                <label>Sportsbook <input id="props-book" value="DraftKings" /></label>
+                <label>Rows JSON <textarea id="props-json" rows="7" spellcheck="false">[
+  {
+    "player_name": "Ja'Marr Chase",
+    "team": "CIN",
+    "position": "WR",
+    "market": "receiving_yards",
+    "line": 82.5,
+    "over_odds": "-110",
+    "under_odds": "-110",
+    "opponent": "BAL",
+    "week": 1,
+    "season": 2025
+  }
+]</textarea></label>
+                <button type="submit" class="primary-button">Import Props JSON</button>
               </form>
             </section>
 

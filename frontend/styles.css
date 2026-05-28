@@ -194,6 +194,141 @@ main {
   align-items: start;
 }
 
+.board-panel,
+.my-picks-panel {
+  margin-bottom: 18px;
+}
+
+.draft-board-grid {
+  overflow-x: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.draft-board-table {
+  min-width: 860px;
+  display: grid;
+  gap: 6px;
+}
+
+.draft-board-row {
+  display: grid;
+  grid-template-columns: 80px repeat(var(--team-count), minmax(130px, 1fr));
+  gap: 6px;
+}
+
+.draft-board-cell {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 8px;
+  min-height: 74px;
+}
+
+.draft-board-cell.header,
+.draft-board-cell.round-label {
+  background: #18231f;
+  color: #f7f2e9;
+  font-weight: 850;
+}
+
+.draft-board-cell.mine {
+  border-color: var(--green);
+  background: #ecf3ef;
+}
+
+.draft-board-cell .pick-meta {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.upcoming-picks {
+  display: grid;
+  gap: 10px;
+}
+
+.upcoming-pick-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fffaf0;
+}
+
+.players-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.4fr) repeat(6, minmax(90px, 0.7fr)) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.players-table {
+  overflow-x: auto;
+}
+
+.players-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.5fr) 72px 72px 72px 80px 120px 120px 120px 90px 90px;
+  gap: 8px;
+  align-items: center;
+  min-width: 980px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.players-row.header {
+  font-weight: 850;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+.player-detail-panel {
+  margin-top: 18px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.detail-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fffaf0;
+}
+
+.detail-section h4 {
+  margin: 0 0 8px;
+}
+
+.detail-table {
+  display: grid;
+  gap: 6px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(80px, 1fr));
+  gap: 6px;
+  font-size: 0.86rem;
+}
+
+.detail-row.two-column {
+  grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr);
+}
+
+.practice-pick-form,
+.team-select-wrap,
+.setup-status {
+  margin-top: 12px;
+}
+
 .setup-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -554,7 +689,9 @@ textarea {
   .draft-grid,
   .setup-grid,
   .chat-layout,
-  .waiver-grid {
+  .waiver-grid,
+  .players-filter-bar,
+  .detail-grid {
     grid-template-columns: 1fr;
   }
 
@@ -588,7 +725,9 @@ textarea {
   .form-row,
   .keeper-panel .form-row,
   .filter-bar,
-  .consensus-grid {
+  .consensus-grid,
+  .players-filter-bar,
+  .detail-grid {
     grid-template-columns: 1fr;
   }
 

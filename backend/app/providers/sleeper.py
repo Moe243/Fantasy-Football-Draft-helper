@@ -38,6 +38,18 @@ class SleeperClient:
     def draft_picks(self, draft_id: str) -> list[dict[str, Any]]:
         return get_json(f"{self.base_url}/draft/{draft_id}/picks")
 
+    def draft(self, draft_id: str) -> dict[str, Any]:
+        return get_json(f"{self.base_url}/draft/{draft_id}")
+
+    def traded_picks(self, league_id: str) -> list[dict[str, Any]]:
+        return get_json(f"{self.base_url}/league/{league_id}/traded_picks")
+
+    def draft_traded_picks(self, draft_id: str) -> list[dict[str, Any]]:
+        return get_json(f"{self.base_url}/draft/{draft_id}/traded_picks")
+
+    def nfl_state(self) -> dict[str, Any]:
+        return get_json(f"{self.base_url}/state/nfl")
+
     def players(self, sport: str = "nfl") -> dict[str, Any]:
         return get_json(f"{self.base_url}/players/{sport}", timeout=30)
 
@@ -54,6 +66,7 @@ class SleeperClient:
         picks: list[dict[str, Any]] = []
         if active_draft and active_draft.get("draft_id"):
             picks = self.draft_picks(active_draft["draft_id"])
+            active_draft = self.draft(active_draft["draft_id"])
         return {
             "league": league,
             "rosters": self.rosters(league_id),
@@ -61,4 +74,5 @@ class SleeperClient:
             "drafts": drafts,
             "active_draft": active_draft,
             "picks": picks,
+            "traded_picks": self.traded_picks(league_id),
         }
