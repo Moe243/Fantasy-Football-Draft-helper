@@ -429,6 +429,49 @@ main {
   margin-top: 12px;
 }
 
+.draft-order-panel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.compact-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.compact-heading h4 {
+  margin: 0;
+}
+
+.draft-order-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.draft-order-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(90px, 0.8fr) 76px;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 8px;
+}
+
+.draft-order-row span {
+  font-weight: 850;
+}
+
+.draft-order-row small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .setup-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -822,14 +865,16 @@ textarea {
   .panel-head,
   .recommendation-card,
   .compact-row,
-  .chat-form {
+  .chat-form,
+  .draft-order-row {
     grid-template-columns: 1fr;
     align-items: start;
   }
 
   .toolbar,
   .panel-head,
-  .compact-row {
+  .compact-row,
+  .draft-order-row {
     display: grid;
   }
 

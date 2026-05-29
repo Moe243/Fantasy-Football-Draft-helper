@@ -12,6 +12,7 @@ const state = {
   leagueId: window.localStorage.getItem("sleeperLeagueId") || "",
   setupStatus: null,
   managers: [],
+  draftMapping: [],
   draftBoard: null,
   draftState: null,
   bestAvailable: [],
@@ -75,6 +76,7 @@ function renderAll() {
   renderPlayersTable();
   renderPlayerDetail();
   renderMyTeamSelect();
+  renderDraftOrderMapping();
   renderImportStatus();
   renderPracticeStatus();
 }
@@ -543,6 +545,43 @@ function renderMyTeamSelect() {
     .join("");
 }
 
+function renderDraftOrderMapping() {
+  const container = $("#draft-order-mapping");
+  if (!container) return;
+  const mapping = state.draftMapping?.length
+    ? state.draftMapping
+    : state.draftBoard?.draft_order || [];
+  if (!state.leagueId) {
+    container.innerHTML = emptyState("Import your Sleeper league to review draft slots.");
+    return;
+  }
+  if (!mapping.length) {
+    container.innerHTML = emptyState("No draft-slot mapping imported yet.");
+    return;
+  }
+  container.innerHTML = `
+    <div class="draft-order-grid">
+      ${mapping.map((item) => `
+        <label class="draft-order-row">
+          <span>${escapeHtml(item.team_name || item.manager_name || item.display_name || `Roster ${item.roster_id || ""}`)}</span>
+          <small>${escapeHtml(item.display_name || "")}${item.roster_id ? ` · Roster ${escapeHtml(item.roster_id)}` : ""}</small>
+          <input
+            class="draft-slot-input"
+            type="number"
+            min="1"
+            max="32"
+            value="${escapeHtml(item.draft_slot || "")}"
+            data-roster-id="${escapeHtml(item.roster_id || "")}"
+            data-sleeper-user-id="${escapeHtml(item.sleeper_user_id || "")}"
+            data-display-name="${escapeHtml(item.display_name || "")}"
+            data-team-name="${escapeHtml(item.team_name || item.manager_name || "")}"
+          />
+        </label>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderImportStatus() {
   const container = $("#import-status");
   if (!container) return;
@@ -642,12 +681,14 @@ async function refreshDraftState() {
     state.myPicks = [];
     state.likelyAvailable = [];
     state.rosterNeeds = [];
+    state.draftMapping = [];
     state.currentPickTeam = null;
     state.isMyPick = false;
     renderDraftRoomStatus();
     renderDraftBoard();
     renderMyUpcomingPicks();
     renderRosterNeeds();
+    renderDraftOrderMapping();
     return;
   }
   const query = new URLSearchParams(draftStateQueryParams());
@@ -659,6 +700,7 @@ async function refreshDraftState() {
 function applyDraftState(payload) {
   state.draftState = payload;
   state.draftBoard = payload;
+  state.draftMapping = payload.draft_order || state.draftMapping || [];
   state.currentPick = payload.current_pick || 1;
   state.currentPickTeam = payload.current_pick_team || null;
   state.isMyPick = Boolean(payload.is_my_pick);
@@ -679,6 +721,7 @@ function applyDraftState(payload) {
   renderRosterNeeds();
   renderRecommendations();
   renderPicks();
+  renderDraftOrderMapping();
   renderPracticeStatus();
 }
 
@@ -732,7 +775,9 @@ async function refreshSetupStatus() {
   const query = new URLSearchParams();
   if (state.leagueId) query.set("league_id", state.leagueId);
   state.setupStatus = await api(`/api/setup/status?${query.toString()}`);
+  state.draftMapping = state.setupStatus?.league?.draft_mapping || state.draftMapping || [];
   renderImportStatus();
+  renderDraftOrderMapping();
 }
 
 async function refreshLeagueManagers() {
@@ -744,10 +789,14 @@ async function refreshLeagueManagers() {
   try {
     const result = await api(`/api/league/managers?league_id=${encodeURIComponent(state.leagueId)}`);
     state.managers = result.managers || [];
+    if (!state.draftMapping.length) {
+      state.draftMapping = state.managers.filter((manager) => manager.draft_slot);
+    }
   } catch (error) {
     state.managers = [];
   }
   renderMyTeamSelect();
+  renderDraftOrderMapping();
 }
 
 async function refreshDraftBoard() {
@@ -917,6 +966,27 @@ document.addEventListener("click", async (event) => {
     });
     await Promise.all([refreshLeagueManagers(), refreshDraftState(), refreshSetupStatus()]);
     toast("My Team saved.");
+    return;
+  }
+
+  if (target.id === "save-draft-slots") {
+    const leagueId = requireLeagueId();
+    if (!leagueId) return;
+    const slots = $$(".draft-slot-input").map((input) => ({
+      sleeper_user_id: input.dataset.sleeperUserId || null,
+      roster_id: input.dataset.rosterId ? Number(input.dataset.rosterId) : null,
+      display_name: input.dataset.displayName || "",
+      team_name: input.dataset.teamName || "",
+      draft_slot: Number(input.value),
+    }));
+    const result = await api("/api/draft/slots/update", {
+      method: "POST",
+      body: JSON.stringify({ league_id: leagueId, slots }),
+    });
+    state.draftMapping = result.draft_mapping || [];
+    if (result.draft_state) applyDraftState(result.draft_state);
+    await Promise.all([refreshLeagueManagers(), refreshSetupStatus()]);
+    toast("Draft order saved and board rebuilt.");
     return;
   }
 
@@ -1118,7 +1188,9 @@ $("#sleeper-form").addEventListener("submit", async (event) => {
   state.leagueId = leagueId;
   window.localStorage.setItem("sleeperLeagueId", leagueId);
   state.settings = result.imported.league_settings;
+  state.draftMapping = result.imported.draft_mapping || [];
   renderStatus();
+  renderDraftOrderMapping();
   await Promise.all([refreshLeagueManagers(), refreshSetupStatus(), refreshDraftState()]);
   toast(`Imported ${result.imported.league?.name || "Sleeper league"}.`);
 });

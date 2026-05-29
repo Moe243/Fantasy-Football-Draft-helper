@@ -10,7 +10,7 @@ from backend.app.services.availability import estimate_availability
 from backend.app.services.data_imports import import_prop_rows, import_stat_rows
 from backend.app.services.draft_board import get_draft_board
 from backend.app.services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
-from backend.app.services.league_import import import_sleeper_league, set_my_team
+from backend.app.services.league_import import build_draft_slot_mapping, import_sleeper_league, set_my_team, update_draft_slots
 from backend.app.services.player_detail import player_detail, search_players
 from backend.app.services.practice_draft import simulate_next, start_practice
 from backend.app.services.props_analysis import analyze_props
@@ -165,6 +165,48 @@ class FakeSleeperClient:
         return self.picks
 
 
+class OutOfOrderSleeperClient:
+    def fetch_league_snapshot(self, league_id):
+        users = [{"user_id": "u10", "display_name": "yahia21", "metadata": {"team_name": "Yahia"}}]
+        users += [
+            {"user_id": f"u{i}", "display_name": f"Manager {i}", "metadata": {"team_name": f"Team {i}"}}
+            for i in range(1, 10)
+        ]
+        return {
+            "league": {
+                "league_id": league_id,
+                "draft_id": "D10",
+                "name": "Ten Team",
+                "season": "2025",
+                "status": "pre_draft",
+                "total_rosters": 10,
+                "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "DEF", "K", "BN"],
+                "scoring_settings": {"rec": 1},
+                "settings": {},
+                "previous_league_id": None,
+            },
+            "users": users,
+            "rosters": [{"roster_id": 10, "owner_id": "u10"}] + [{"roster_id": i, "owner_id": f"u{i}"} for i in range(9, 0, -1)],
+            "drafts": [{"draft_id": "D10"}],
+            "traded_picks": [],
+        }
+
+    def draft(self, draft_id):
+        return {
+            "draft_id": draft_id,
+            "season": "2025",
+            "status": "pre_draft",
+            "type": "snake",
+            "settings": {"teams": 10, "rounds": 2},
+            "metadata": {},
+            "draft_order": {**{f"u{i}": i for i in range(1, 10)}, "u10": 10},
+            "slot_to_roster_id": {**{str(i): i for i in range(1, 10)}, "10": 10},
+        }
+
+    def draft_picks(self, draft_id):
+        return []
+
+
 class SleeperDraftToolTests(unittest.TestCase):
     def test_startup_auto_import_uses_sleeper_when_empty(self):
         conn = memory_db()
@@ -250,6 +292,82 @@ class SleeperDraftToolTests(unittest.TestCase):
         removed = remove_draft_pick(conn, "L1", 1)
         self.assertEqual(removed["current_pick"], 1)
         self.assertIsNone(removed["board"][0]["picks"][0]["player"])
+
+    def test_sleeper_draft_order_metadata_overrides_user_and_roster_order(self):
+        conn = memory_db()
+        result = import_sleeper_league(conn, "L10", client=OutOfOrderSleeperClient())
+
+        yahia_mapping = next(item for item in result["draft_mapping"] if item["display_name"] == "yahia21")
+        self.assertEqual(yahia_mapping["draft_slot"], 10)
+        self.assertEqual(yahia_mapping["roster_id"], 10)
+        self.assertEqual([item["draft_slot"] for item in result["draft_mapping"]], list(range(1, 11)))
+
+        managers = conn.execute(
+            """
+            SELECT lm.display_name, ds.draft_slot
+            FROM league_managers lm
+            JOIN draft_slots ds ON ds.league_id = lm.league_id AND ds.roster_id = lm.roster_id
+            WHERE lm.league_id = ?
+            ORDER BY ds.draft_slot
+            """,
+            ("L10",),
+        ).fetchall()
+        self.assertEqual(managers[-1]["display_name"], "yahia21")
+        self.assertEqual(managers[-1]["draft_slot"], 10)
+
+        set_my_team(conn, "L10", 10)
+        board = get_draft_board(conn, "L10")
+        self.assertEqual(board["draft_order"][9]["manager_name"], "Yahia")
+        self.assertEqual(board["board"][0]["picks"][9]["pick_no"], 10)
+        self.assertEqual(board["board"][0]["picks"][9]["roster_id"], 10)
+        self.assertTrue(board["board"][0]["picks"][9]["is_mine"])
+        self.assertEqual(board["board"][1]["picks"][9]["pick_no"], 11)
+        self.assertEqual([pick["pick_no"] for pick in board["my_picks"]], [10, 11])
+
+    def test_build_draft_slot_mapping_does_not_sort_alphabetically_or_by_roster_id(self):
+        users = [
+            {"user_id": "u10", "display_name": "yahia21"},
+            {"user_id": "u1", "display_name": "Alpha"},
+            {"user_id": "u2", "display_name": "Beta"},
+        ]
+        rosters = [
+            {"roster_id": 10, "owner_id": "u10"},
+            {"roster_id": 2, "owner_id": "u2"},
+            {"roster_id": 1, "owner_id": "u1"},
+        ]
+        league = {"league_id": "L3", "draft_id": "D3", "total_rosters": 3}
+        drafts = [
+            {
+                "draft_id": "D3",
+                "settings": {"teams": 3},
+                "draft_order": {"u10": 3, "u1": 1, "u2": 2},
+                "slot_to_roster_id": {"1": 1, "2": 2, "3": 10},
+            }
+        ]
+
+        mapping = build_draft_slot_mapping(league, users, rosters, drafts)
+
+        self.assertEqual([item["display_name"] for item in mapping], ["Alpha", "Beta", "yahia21"])
+        self.assertEqual(mapping[-1]["draft_slot"], 3)
+        self.assertEqual(mapping[-1]["roster_id"], 10)
+
+    def test_manual_draft_slot_update_recalculates_my_picks(self):
+        conn = memory_db()
+        import_sleeper_league(conn, "L1", client=FakeSleeperClient(picks=[]))
+        set_my_team(conn, "L1", 2)
+
+        update_draft_slots(
+            conn,
+            "L1",
+            [
+                {"sleeper_user_id": "u1", "roster_id": 1, "draft_slot": 1},
+                {"sleeper_user_id": "u3", "roster_id": 3, "draft_slot": 2},
+                {"sleeper_user_id": "u2", "roster_id": 2, "draft_slot": 3},
+            ],
+        )
+        board = get_draft_board(conn, "L1")
+        self.assertEqual(board["draft_order"][2]["roster_id"], 2)
+        self.assertEqual([pick["pick_no"] for pick in board["my_picks"]], [3, 4, 9])
 
     def test_player_search_filters_and_detail_imports(self):
         conn = memory_db()

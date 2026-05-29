@@ -71,7 +71,13 @@ def get_managers(conn: sqlite3.Connection, league_id: str) -> list[dict[str, Any
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT * FROM league_managers WHERE league_id = ? ORDER BY roster_id",
+            """
+            SELECT lm.*, ds.draft_slot
+            FROM league_managers lm
+            LEFT JOIN draft_slots ds ON ds.league_id = lm.league_id AND ds.roster_id = lm.roster_id
+            WHERE lm.league_id = ?
+            ORDER BY COALESCE(ds.draft_slot, 9999), lm.id
+            """,
             (league_id,),
         ).fetchall()
     ]

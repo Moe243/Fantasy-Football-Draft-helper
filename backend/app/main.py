@@ -23,7 +23,7 @@ from .services.consensus import get_consensus_for_player, get_consensus_rows
 from .services.data_imports import import_prop_rows, import_stat_rows
 from .services.draft_board import get_draft_board
 from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
-from .services.league_import import import_sleeper_league, set_my_team
+from .services.league_import import draft_mapping_for_league, import_sleeper_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
 from .services.practice_draft import (
     get_current_practice,
@@ -172,6 +172,15 @@ class FantasyHandler(BaseHTTPRequestHandler):
             league_id = require(payload, "league_id")
             roster_id = int(require(payload, "roster_id"))
             return {"my_team": dict(set_my_team(conn, league_id, roster_id))}
+
+        if method == "POST" and path == "/api/draft/slots/update":
+            payload = self.read_json()
+            league_id = require(payload, "league_id")
+            slots = payload.get("slots")
+            if not isinstance(slots, list):
+                raise ValueError("slots must be a list")
+            updated = update_draft_slots(conn, league_id, slots)
+            return {**updated, "draft_state": get_draft_state(conn, league_id)}
 
         if path == "/api/keepers":
             if method == "GET":
@@ -504,7 +513,13 @@ def league_managers(conn, league_id: str) -> list[dict[str, Any]]:
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT * FROM league_managers WHERE league_id = ? ORDER BY roster_id",
+            """
+            SELECT lm.*, ds.draft_slot
+            FROM league_managers lm
+            LEFT JOIN draft_slots ds ON ds.league_id = lm.league_id AND ds.roster_id = lm.roster_id
+            WHERE lm.league_id = ?
+            ORDER BY COALESCE(ds.draft_slot, 9999), lm.id
+            """,
             (league_id,),
         ).fetchall()
     ]
@@ -521,7 +536,7 @@ def league_status(conn, league_id: str | None) -> dict[str, Any] | None:
         "drafts_imported": conn.execute("SELECT COUNT(*) AS count FROM league_drafts WHERE league_id = ?", (league_id,)).fetchone()["count"],
         "draft_picks_imported": conn.execute("SELECT COUNT(*) AS count FROM league_draft_picks WHERE league_id = ?", (league_id,)).fetchone()["count"],
     }
-    return {"league": dict(league), **counts}
+    return {"league": dict(league), **counts, "draft_mapping": draft_mapping_for_league(conn, league_id)}
 
 
 def first(query: dict[str, list[str]], name: str) -> str | None:

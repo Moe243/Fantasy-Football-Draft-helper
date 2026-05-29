@@ -17,11 +17,16 @@ def import_sleeper_league(conn: sqlite3.Connection, league_id: str, client: Slee
     sleeper = client or SleeperClient()
     snapshot = sleeper.fetch_league_snapshot(league_id)
     league = snapshot["league"]
+    users = snapshot.get("users") or []
+    rosters = snapshot.get("rosters") or []
     save_league(conn, league)
     update_local_settings(conn, league)
-    managers = save_managers(conn, league_id, snapshot.get("users") or [], snapshot.get("rosters") or [])
     drafts = save_drafts_and_picks(conn, league_id, snapshot.get("drafts") or [], sleeper)
-    traded = save_user_draft_picks(conn, league_id, drafts[0] if drafts else None, snapshot.get("traded_picks") or [])
+    current_draft = select_current_draft(league, drafts)
+    mapping_result = build_draft_slot_mapping_result(league, users, rosters, [current_draft] if current_draft else drafts)
+    managers = save_managers(conn, league_id, users, rosters, mapping_result["draft_mapping"])
+    save_draft_slots(conn, league_id, mapping_result["draft_mapping"])
+    traded = save_user_draft_picks(conn, league_id, current_draft, snapshot.get("traded_picks") or [])
     previous_count = import_previous_drafts(conn, league, sleeper)
     tendencies = calculate_manager_tendencies(conn, league_id)
     return {
@@ -29,11 +34,14 @@ def import_sleeper_league(conn: sqlite3.Connection, league_id: str, client: Slee
         "league": league_summary(league),
         "managers_imported": managers,
         "drafts_imported": len(drafts),
-        "draft_picks_imported": sum(item["pick_count"] for item in drafts),
+        "draft_picks_imported": sum(int(item.get("_pick_count") or 0) for item in drafts),
         "previous_drafts_imported": previous_count,
         "traded_picks_found": len(snapshot.get("traded_picks") or []),
         "traded_pick_note": None if snapshot.get("traded_picks") else "Traded pick data was not found; default snake draft picks were generated.",
         "user_draft_picks_imported": traded,
+        "draft_mapping": draft_mapping_for_league(conn, league_id),
+        "draft_mapping_source": mapping_result["source"],
+        "draft_mapping_warnings": mapping_result["warnings"],
         "manager_tendencies": tendencies,
         "needs_team_selection": current_my_manager(conn, league_id) is None,
     }
@@ -98,17 +106,20 @@ def save_managers(
     league_id: str,
     users: list[dict[str, Any]],
     rosters: list[dict[str, Any]],
+    draft_mapping: list[dict[str, Any]] | None = None,
 ) -> int:
     users_by_id = {str(user.get("user_id")): user for user in users}
     existing_me = current_my_manager(conn, league_id)
     imported = 0
-    for roster in rosters:
-        owner_id = str(roster.get("owner_id") or "")
-        user = users_by_id.get(owner_id, {})
+    manager_rows = draft_mapping or fallback_manager_rows(league_id, users, rosters)
+    for row in manager_rows:
+        roster_id = row.get("roster_id")
+        sleeper_user_id = row.get("sleeper_user_id")
+        user = users_by_id.get(str(sleeper_user_id), {})
         metadata = user.get("metadata") or {}
-        display_name = user.get("display_name") or user.get("username") or f"Roster {roster.get('roster_id')}"
-        team_name = metadata.get("team_name") or metadata.get("display_name") or display_name
-        is_me = 1 if existing_me and int(existing_me["roster_id"] or 0) == int(roster.get("roster_id") or 0) else 0
+        display_name = row.get("display_name") or user.get("display_name") or user.get("username") or f"Roster {roster_id}"
+        team_name = row.get("team_name") or metadata.get("team_name") or metadata.get("display_name") or display_name
+        is_me = 1 if existing_me and roster_id is not None and int(existing_me["roster_id"] or 0) == int(roster_id or 0) else 0
         conn.execute(
             """
             INSERT INTO league_managers (
@@ -127,13 +138,13 @@ def save_managers(
             """,
             (
                 league_id,
-                owner_id or None,
-                roster.get("roster_id"),
+                sleeper_user_id or None,
+                roster_id,
                 display_name,
                 team_name,
-                user.get("avatar"),
+                row.get("avatar") or user.get("avatar"),
                 is_me,
-                json.dumps({"user": user, "roster": roster}),
+                json.dumps(row.get("raw_json") or {"user": user, "roster": row.get("roster")}),
             ),
         )
         imported += 1
@@ -158,9 +169,10 @@ def save_drafts_and_picks(
             draft = draft_stub
         picks = sleeper.draft_picks(draft_id)
         save_draft(conn, league_id, draft)
-        save_draft_slots(conn, league_id, draft)
         save_draft_picks(conn, league_id, draft_id, picks)
-        imported.append({"draft_id": draft_id, "pick_count": len(picks)})
+        imported_draft = dict(draft)
+        imported_draft["_pick_count"] = len(picks)
+        imported.append(imported_draft)
     return imported
 
 
@@ -200,41 +212,312 @@ def save_draft(conn: sqlite3.Connection, league_id: str, draft: dict[str, Any]) 
     conn.commit()
 
 
-def save_draft_slots(conn: sqlite3.Connection, league_id: str, draft: dict[str, Any]) -> None:
-    slot_to_roster = draft.get("slot_to_roster_id") or {}
-    draft_order = draft.get("draft_order") or {}
-    if not slot_to_roster and draft_order:
-        owner_to_roster = {
-            str(row["sleeper_user_id"]): row["roster_id"]
-            for row in conn.execute("SELECT sleeper_user_id, roster_id FROM league_managers WHERE league_id = ?", (league_id,))
-        }
-        slot_to_roster = {
-            str(slot): owner_to_roster.get(str(user_id))
-            for user_id, slot in draft_order.items()
-        }
-    managers = managers_by_roster(conn, league_id)
-    for slot_raw, roster_id in slot_to_roster.items():
-        if roster_id is None:
+def save_draft_slots(conn: sqlite3.Connection, league_id: str, draft_mapping: list[dict[str, Any]]) -> None:
+    conn.execute("DELETE FROM draft_slots WHERE league_id = ?", (league_id,))
+    for row in sorted(draft_mapping, key=lambda item: int(item.get("draft_slot") or 9999)):
+        draft_slot = row.get("draft_slot")
+        if not draft_slot:
             continue
-        manager = managers.get(int(roster_id), {})
         conn.execute(
             """
             INSERT INTO draft_slots (league_id, roster_id, sleeper_user_id, manager_name, draft_slot)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(league_id, draft_slot) DO UPDATE SET
-                roster_id = excluded.roster_id,
-                sleeper_user_id = excluded.sleeper_user_id,
-                manager_name = excluded.manager_name
             """,
             (
                 league_id,
-                int(roster_id),
-                manager.get("sleeper_user_id"),
-                manager.get("team_name") or manager.get("display_name"),
-                int(slot_raw),
+                optional_int(row.get("roster_id")),
+                row.get("sleeper_user_id"),
+                row.get("team_name") or row.get("display_name") or row.get("manager_name"),
+                int(draft_slot),
             ),
         )
     conn.commit()
+
+
+def build_draft_slot_mapping(
+    league: dict[str, Any],
+    users: list[dict[str, Any]],
+    rosters: list[dict[str, Any]],
+    drafts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return managers sorted by true Sleeper draft slot."""
+    return build_draft_slot_mapping_result(league, users, rosters, drafts)["draft_mapping"]
+
+
+def build_draft_slot_mapping_result(
+    league: dict[str, Any],
+    users: list[dict[str, Any]],
+    rosters: list[dict[str, Any]],
+    drafts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    draft = select_current_draft(league, drafts)
+    draft_order = dict((draft or {}).get("draft_order") or {})
+    slot_to_roster = dict((draft or {}).get("slot_to_roster_id") or {})
+    users_by_id = {str(user.get("user_id")): user for user in users if user.get("user_id") is not None}
+    rosters_by_id = {int(roster["roster_id"]): roster for roster in rosters if roster.get("roster_id") is not None}
+    rosters_by_owner_id = {
+        str(roster.get("owner_id")): roster
+        for roster in rosters
+        if roster.get("owner_id") is not None
+    }
+    teams = draft_team_count(league, draft, rosters, draft_order, slot_to_roster)
+    warnings: list[str] = []
+    by_slot: dict[int, dict[str, Any]] = {}
+    source_parts: list[str] = []
+
+    if slot_to_roster:
+        source_parts.append("slot_to_roster_id")
+        for slot_raw, roster_raw in slot_to_roster.items():
+            slot = optional_int(slot_raw)
+            roster_id = optional_int(roster_raw)
+            if not slot or not roster_id:
+                continue
+            roster = rosters_by_id.get(roster_id, {"roster_id": roster_id})
+            user_id = str(roster.get("owner_id") or "")
+            by_slot[slot] = manager_mapping_row(
+                league,
+                draft,
+                slot,
+                roster,
+                users_by_id.get(user_id, {}),
+                "slot_to_roster_id",
+            )
+
+    if draft_order:
+        source_parts.append("draft_order")
+        for user_id_raw, slot_raw in draft_order.items():
+            user_id = str(user_id_raw)
+            slot = optional_int(slot_raw)
+            if not slot:
+                continue
+            roster = rosters_by_owner_id.get(user_id)
+            user = users_by_id.get(user_id, {"user_id": user_id})
+            existing = by_slot.get(slot)
+            if existing and roster and existing.get("roster_id") and int(existing["roster_id"]) != int(roster["roster_id"]):
+                warnings.append(
+                    f"Draft metadata disagreement at slot {slot}: slot_to_roster_id points to roster "
+                    f"{existing['roster_id']}, but draft_order maps user {user_id} to roster {roster['roster_id']}. "
+                    "Using draft_order for this slot."
+                )
+            if not roster and existing:
+                roster = rosters_by_id.get(int(existing["roster_id"])) if existing.get("roster_id") else None
+            row = manager_mapping_row(
+                league,
+                draft,
+                slot,
+                roster or {},
+                user,
+                "draft_order+slot_to_roster_id" if existing else "draft_order",
+            )
+            if existing and not row.get("roster_id"):
+                row["roster_id"] = existing.get("roster_id")
+            by_slot[slot] = row
+
+    if not slot_to_roster and not draft_order:
+        warnings.append("Sleeper draft metadata did not include draft_order or slot_to_roster_id; draft order was inferred from roster order and may need manual correction.")
+        source_parts.append("inferred_roster_order")
+        for index, roster in enumerate(rosters, start=1):
+            if index > teams:
+                break
+            user_id = str(roster.get("owner_id") or "")
+            by_slot[index] = manager_mapping_row(
+                league,
+                draft,
+                index,
+                roster,
+                users_by_id.get(user_id, {}),
+                "inferred_roster_order",
+            )
+
+    fill_missing_slots(league, draft, teams, by_slot, rosters, users_by_id, warnings)
+    mapping = [by_slot[slot] for slot in sorted(by_slot) if slot > 0]
+    return {
+        "draft": draft,
+        "draft_mapping": mapping,
+        "warnings": warnings,
+        "source": "+".join(dict.fromkeys(source_parts)) or "unknown",
+    }
+
+
+def fill_missing_slots(
+    league: dict[str, Any],
+    draft: dict[str, Any] | None,
+    teams: int,
+    by_slot: dict[int, dict[str, Any]],
+    rosters: list[dict[str, Any]],
+    users_by_id: dict[str, dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    used_rosters = {int(row["roster_id"]) for row in by_slot.values() if row.get("roster_id") is not None}
+    unused_rosters = [roster for roster in rosters if roster.get("roster_id") is not None and int(roster["roster_id"]) not in used_rosters]
+    if unused_rosters and len(by_slot) < teams:
+        warnings.append("Sleeper draft metadata was partial; missing slots were filled from remaining rosters in Sleeper roster order.")
+    empty_slots = [slot for slot in range(1, teams + 1) if slot not in by_slot]
+    for slot, roster in zip(empty_slots, unused_rosters):
+        user_id = str(roster.get("owner_id") or "")
+        by_slot[slot] = manager_mapping_row(
+            league,
+            draft,
+            slot,
+            roster,
+            users_by_id.get(user_id, {}),
+            "inferred_missing_slot",
+        )
+
+
+def manager_mapping_row(
+    league: dict[str, Any],
+    draft: dict[str, Any] | None,
+    draft_slot: int,
+    roster: dict[str, Any] | None,
+    user: dict[str, Any] | None,
+    source: str,
+) -> dict[str, Any]:
+    roster = roster or {}
+    user = user or {}
+    metadata = user.get("metadata") or {}
+    roster_id = optional_int(roster.get("roster_id"))
+    sleeper_user_id = str(user.get("user_id") or roster.get("owner_id") or "") or None
+    display_name = user.get("display_name") or user.get("username") or f"Roster {roster_id or draft_slot}"
+    team_name = metadata.get("team_name") or metadata.get("display_name") or display_name
+    return {
+        "league_id": league.get("league_id"),
+        "draft_id": (draft or {}).get("draft_id"),
+        "draft_slot": int(draft_slot),
+        "roster_id": roster_id,
+        "sleeper_user_id": sleeper_user_id,
+        "display_name": display_name,
+        "team_name": team_name,
+        "manager_name": team_name or display_name,
+        "avatar": user.get("avatar"),
+        "source": source,
+        "raw_json": {"user": user, "roster": roster, "source": source, "draft": {"draft_id": (draft or {}).get("draft_id")}},
+    }
+
+
+def fallback_manager_rows(
+    league_id: str,
+    users: list[dict[str, Any]],
+    rosters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    league = {"league_id": league_id, "total_rosters": len(rosters)}
+    return build_draft_slot_mapping_result(league, users, rosters, [])["draft_mapping"]
+
+
+def select_current_draft(league: dict[str, Any], drafts: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    candidates = [draft for draft in drafts if draft]
+    if not candidates:
+        return None
+    league_draft_id = str(league.get("draft_id") or "")
+    if league_draft_id:
+        for draft in candidates:
+            if str(draft.get("draft_id") or "") == league_draft_id:
+                return draft
+    season = str(league.get("season") or "")
+    if season:
+        for draft in candidates:
+            if str(draft.get("season") or "") == season:
+                return draft
+    return candidates[0]
+
+
+def draft_team_count(
+    league: dict[str, Any],
+    draft: dict[str, Any] | None,
+    rosters: list[dict[str, Any]],
+    draft_order: dict[str, Any],
+    slot_to_roster: dict[str, Any],
+) -> int:
+    settings = (draft or {}).get("settings") or {}
+    values = [
+        optional_int(settings.get("teams")),
+        optional_int(league.get("total_rosters")),
+        len(rosters) or None,
+        max((optional_int(value) or 0 for value in draft_order.values()), default=0) or None,
+        max((optional_int(key) or 0 for key in slot_to_roster.keys()), default=0) or None,
+    ]
+    return next((int(value) for value in values if value), 10)
+
+
+def draft_mapping_for_league(conn: sqlite3.Connection, league_id: str) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT
+                ds.draft_slot,
+                ds.roster_id,
+                ds.sleeper_user_id,
+                COALESCE(lm.display_name, ds.manager_name) AS display_name,
+                COALESCE(lm.team_name, ds.manager_name) AS team_name,
+                ds.manager_name,
+                lm.avatar,
+                COALESCE(lm.is_me, 0) AS is_me
+            FROM draft_slots ds
+            LEFT JOIN league_managers lm
+                ON lm.league_id = ds.league_id
+                AND (
+                    (ds.roster_id IS NOT NULL AND lm.roster_id = ds.roster_id)
+                    OR (ds.roster_id IS NULL AND ds.sleeper_user_id IS NOT NULL AND lm.sleeper_user_id = ds.sleeper_user_id)
+                )
+            WHERE ds.league_id = ?
+            ORDER BY ds.draft_slot
+            """,
+            (league_id,),
+        ).fetchall()
+    ]
+
+
+def update_draft_slots(conn: sqlite3.Connection, league_id: str, slots: list[dict[str, Any]]) -> dict[str, Any]:
+    if not slots:
+        raise ValueError("slots must include at least one draft slot")
+    seen_slots: set[int] = set()
+    manager_by_roster = managers_by_roster(conn, league_id)
+    manager_by_user = {
+        str(row["sleeper_user_id"]): dict(row)
+        for row in conn.execute(
+            "SELECT * FROM league_managers WHERE league_id = ? AND sleeper_user_id IS NOT NULL",
+            (league_id,),
+        ).fetchall()
+    }
+    mapping: list[dict[str, Any]] = []
+    for item in slots:
+        draft_slot = optional_int(item.get("draft_slot"))
+        if not draft_slot or draft_slot < 1:
+            raise ValueError("Each slot must include a positive draft_slot")
+        if draft_slot in seen_slots:
+            raise ValueError(f"Duplicate draft slot: {draft_slot}")
+        seen_slots.add(draft_slot)
+        roster_id = optional_int(item.get("roster_id"))
+        sleeper_user_id = str(item.get("sleeper_user_id") or "") or None
+        manager = manager_by_roster.get(roster_id or -1) or manager_by_user.get(str(sleeper_user_id or ""), {})
+        mapping.append(
+            {
+                "league_id": league_id,
+                "draft_slot": draft_slot,
+                "roster_id": roster_id,
+                "sleeper_user_id": sleeper_user_id or manager.get("sleeper_user_id"),
+                "display_name": manager.get("display_name") or item.get("display_name") or f"Slot {draft_slot}",
+                "team_name": manager.get("team_name") or item.get("team_name") or manager.get("display_name") or f"Slot {draft_slot}",
+                "manager_name": manager.get("team_name") or item.get("team_name") or manager.get("display_name") or f"Slot {draft_slot}",
+                "avatar": manager.get("avatar"),
+                "source": "manual",
+            }
+        )
+    save_draft_slots(conn, league_id, mapping)
+    latest_draft = latest_draft_for_league(conn, league_id)
+    if latest_draft:
+        save_user_draft_picks(conn, league_id, json.loads(latest_draft["raw_json"] or "{}"), [])
+    return {"draft_mapping": draft_mapping_for_league(conn, league_id)}
+
+
+def optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def save_draft_picks(conn: sqlite3.Connection, league_id: str, draft_id: str, picks: list[dict[str, Any]]) -> None:
