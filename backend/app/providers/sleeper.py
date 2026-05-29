@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import settings
-from .http import get_json
+from .http import ProviderError, get_json
 
 
 class SleeperClient:
@@ -27,25 +27,28 @@ class SleeperClient:
         return get_json(f"{self.base_url}/league/{league_id}")
 
     def rosters(self, league_id: str) -> list[dict[str, Any]]:
-        return get_json(f"{self.base_url}/league/{league_id}/rosters")
+        return self._safe_list(f"{self.base_url}/league/{league_id}/rosters")
 
     def users(self, league_id: str) -> list[dict[str, Any]]:
-        return get_json(f"{self.base_url}/league/{league_id}/users")
+        return self._safe_list(f"{self.base_url}/league/{league_id}/users")
 
     def drafts(self, league_id: str) -> list[dict[str, Any]]:
-        return get_json(f"{self.base_url}/league/{league_id}/drafts")
+        return self._safe_list(f"{self.base_url}/league/{league_id}/drafts")
 
     def draft_picks(self, draft_id: str) -> list[dict[str, Any]]:
-        return get_json(f"{self.base_url}/draft/{draft_id}/picks")
+        return self._safe_list(f"{self.base_url}/draft/{draft_id}/picks")
 
     def draft(self, draft_id: str) -> dict[str, Any]:
         return get_json(f"{self.base_url}/draft/{draft_id}")
 
     def traded_picks(self, league_id: str) -> list[dict[str, Any]]:
-        return get_json(f"{self.base_url}/league/{league_id}/traded_picks")
+        return self.league_traded_picks(league_id)
+
+    def league_traded_picks(self, league_id: str) -> list[dict[str, Any]]:
+        return self._safe_list(f"{self.base_url}/league/{league_id}/traded_picks")
 
     def draft_traded_picks(self, draft_id: str) -> list[dict[str, Any]]:
-        return get_json(f"{self.base_url}/draft/{draft_id}/traded_picks")
+        return self._safe_list(f"{self.base_url}/draft/{draft_id}/traded_picks")
 
     def nfl_state(self) -> dict[str, Any]:
         return get_json(f"{self.base_url}/state/nfl")
@@ -76,3 +79,10 @@ class SleeperClient:
             "picks": picks,
             "traded_picks": self.traded_picks(league_id),
         }
+
+    def _safe_list(self, url: str) -> list[dict[str, Any]]:
+        try:
+            payload = get_json(url)
+        except ProviderError:
+            return []
+        return payload if isinstance(payload, list) else []

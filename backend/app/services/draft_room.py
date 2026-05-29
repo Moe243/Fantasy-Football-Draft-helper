@@ -65,9 +65,13 @@ def get_draft_state(
 
     return {
         "league": board_data.get("league"),
+        "active_draft_id": board_data.get("active_draft_id"),
         "managers": board_data.get("managers") or [],
         "rounds": board_data.get("rounds") or [],
         "draft_order": board_data.get("draft_order") or [],
+        "draft_mapping": board_data.get("draft_mapping") or board_data.get("draft_order") or [],
+        "traded_picks": board_data.get("traded_picks") or [],
+        "warnings": board_data.get("warnings") or [],
         "my_team": board_data.get("my_team"),
         "current_pick": current_pick,
         "current_pick_team": current_pick_cell,

@@ -79,6 +79,51 @@ def calculate_manager_tendencies(conn: sqlite3.Connection, league_id: str) -> di
     return {"rows_analyzed": len(rows), "tendencies_imported": imported}
 
 
+def draft_history_summary(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
+    draft_rows = conn.execute(
+        """
+        SELECT d.draft_id, d.season, d.status, d.type, COUNT(p.id) AS pick_count
+        FROM league_drafts d
+        LEFT JOIN league_draft_picks p ON p.league_id = d.league_id AND p.draft_id = d.draft_id
+        WHERE d.league_id = ?
+        GROUP BY d.draft_id
+        ORDER BY d.season DESC, d.id DESC
+        """,
+        (league_id,),
+    ).fetchall()
+    pick_rows = conn.execute(
+        """
+        SELECT p.roster_id, p.round, p.position, lm.team_name, lm.display_name
+        FROM league_draft_picks p
+        LEFT JOIN league_managers lm
+            ON lm.league_id = p.league_id AND lm.roster_id = p.roster_id
+        WHERE p.league_id = ? AND p.position IS NOT NULL
+        """,
+        (league_id,),
+    ).fetchall()
+    grouped: dict[int, dict[str, Any]] = {}
+    for row in pick_rows:
+        roster_id = int(row["roster_id"] or 0)
+        item = grouped.setdefault(
+            roster_id,
+            {
+                "roster_id": roster_id,
+                "manager_name": row["team_name"] or row["display_name"] or f"Roster {roster_id}",
+                "total_picks": 0,
+                "positions_by_round": {},
+            },
+        )
+        item["total_picks"] += 1
+        round_key = str(row["round"] or 0)
+        position = row["position"] or "UNK"
+        item["positions_by_round"].setdefault(round_key, {})
+        item["positions_by_round"][round_key][position] = item["positions_by_round"][round_key].get(position, 0) + 1
+    return {
+        "drafts": [dict(row) for row in draft_rows],
+        "history_by_manager": sorted(grouped.values(), key=lambda item: item["manager_name"].lower()),
+    }
+
+
 def avg(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 

@@ -275,6 +275,11 @@ main {
   color: var(--amber);
 }
 
+.tag.traded-tag {
+  background: rgba(42, 92, 126, 0.14);
+  color: var(--blue);
+}
+
 .draft-room-status {
   min-width: 190px;
 }
@@ -454,13 +459,19 @@ main {
 
 .draft-order-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(90px, 0.8fr) 76px;
+  grid-template-columns: 90px minmax(120px, 1fr) minmax(120px, 1fr) 76px minmax(120px, 1fr);
   gap: 8px;
   align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fffaf0;
   padding: 8px;
+}
+
+.draft-order-row.header {
+  background: #18231f;
+  color: #f7f2e9;
+  font-weight: 850;
 }
 
 .draft-order-row span {

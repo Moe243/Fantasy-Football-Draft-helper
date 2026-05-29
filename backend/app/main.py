@@ -22,8 +22,9 @@ from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
 from .services.data_imports import import_prop_rows, import_stat_rows
 from .services.draft_board import get_draft_board
+from .services.draft_history import draft_history_summary
 from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
-from .services.league_import import draft_mapping_for_league, import_sleeper_league, set_my_team, update_draft_slots
+from .services.league_import import draft_mapping_for_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
 from .services.practice_draft import (
     get_current_practice,
@@ -41,6 +42,7 @@ from .services.recommendations import (
     waiver_risers,
 )
 from .services.sleeper_import import import_sleeper_players
+from .services.sleeper_draft_import import import_league_draft_data
 from .services.startup import ensure_sleeper_players
 
 
@@ -259,6 +261,10 @@ class FantasyHandler(BaseHTTPRequestHandler):
             league_id = require_query(query, "league_id")
             return get_draft_board(conn, league_id)
 
+        if method == "GET" and path == "/api/draft/history":
+            league_id = require_query(query, "league_id")
+            return draft_history_summary(conn, league_id)
+
         if method == "GET" and path == "/api/draft/state":
             league_id = require_query(query, "league_id")
             return get_draft_state(
@@ -308,7 +314,7 @@ class FantasyHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/integrations/sleeper/import":
             payload = self.read_json()
             league_id = require(payload, "league_id")
-            imported = import_sleeper_league(conn, league_id)
+            imported = import_league_draft_data(conn, league_id)
             return {"imported": imported, "snapshot": imported}
 
         if method == "POST" and path == "/api/integrations/sleeper/players/import":
@@ -510,17 +516,25 @@ def summarize_sleeper_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def league_managers(conn, league_id: str) -> list[dict[str, Any]]:
+    draft = conn.execute(
+        "SELECT draft_id FROM league_drafts WHERE league_id = ? ORDER BY season DESC, id DESC LIMIT 1",
+        (league_id,),
+    ).fetchone()
+    draft_id = draft["draft_id"] if draft else None
     return [
         dict(row)
         for row in conn.execute(
             """
             SELECT lm.*, ds.draft_slot
             FROM league_managers lm
-            LEFT JOIN draft_slots ds ON ds.league_id = lm.league_id AND ds.roster_id = lm.roster_id
+            LEFT JOIN draft_slots ds
+                ON ds.league_id = lm.league_id
+                AND ds.roster_id = lm.roster_id
+                AND (ds.draft_id = ? OR ds.draft_id IS NULL)
             WHERE lm.league_id = ?
             ORDER BY COALESCE(ds.draft_slot, 9999), lm.id
             """,
-            (league_id,),
+            (draft_id, league_id),
         ).fetchall()
     ]
 
@@ -533,10 +547,23 @@ def league_status(conn, league_id: str | None) -> dict[str, Any] | None:
         return None
     counts = {
         "managers_imported": conn.execute("SELECT COUNT(*) AS count FROM league_managers WHERE league_id = ?", (league_id,)).fetchone()["count"],
+        "users_imported": conn.execute("SELECT COUNT(*) AS count FROM league_managers WHERE league_id = ? AND sleeper_user_id IS NOT NULL", (league_id,)).fetchone()["count"],
+        "rosters_imported": conn.execute("SELECT COUNT(*) AS count FROM league_managers WHERE league_id = ? AND roster_id IS NOT NULL", (league_id,)).fetchone()["count"],
         "drafts_imported": conn.execute("SELECT COUNT(*) AS count FROM league_drafts WHERE league_id = ?", (league_id,)).fetchone()["count"],
         "draft_picks_imported": conn.execute("SELECT COUNT(*) AS count FROM league_draft_picks WHERE league_id = ?", (league_id,)).fetchone()["count"],
+        "traded_picks_imported": conn.execute("SELECT COUNT(*) AS count FROM league_traded_picks WHERE league_id = ?", (league_id,)).fetchone()["count"],
     }
-    return {"league": dict(league), **counts, "draft_mapping": draft_mapping_for_league(conn, league_id)}
+    draft = conn.execute(
+        "SELECT draft_id FROM league_drafts WHERE league_id = ? ORDER BY season DESC, id DESC LIMIT 1",
+        (league_id,),
+    ).fetchone()
+    active_draft_id = draft["draft_id"] if draft else None
+    return {
+        "league": dict(league),
+        **counts,
+        "active_draft_id": active_draft_id,
+        "draft_mapping": draft_mapping_for_league(conn, league_id, active_draft_id),
+    }
 
 
 def first(query: dict[str, list[str]], name: str) -> str | None:

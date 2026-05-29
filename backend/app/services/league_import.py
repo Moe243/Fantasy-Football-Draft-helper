@@ -11,6 +11,7 @@ from ..providers.http import ProviderError
 from ..providers.sleeper import SleeperClient
 from .draft_history import calculate_manager_tendencies
 from .normalization import normalize_position, normalize_team
+from .pick_ownership import calculate_pick_ownership, save_pick_ownership
 
 
 def import_sleeper_league(conn: sqlite3.Connection, league_id: str, client: SleeperClient | None = None) -> dict[str, Any]:
@@ -25,21 +26,33 @@ def import_sleeper_league(conn: sqlite3.Connection, league_id: str, client: Slee
     current_draft = select_current_draft(league, drafts)
     mapping_result = build_draft_slot_mapping_result(league, users, rosters, [current_draft] if current_draft else drafts)
     managers = save_managers(conn, league_id, users, rosters, mapping_result["draft_mapping"])
-    save_draft_slots(conn, league_id, mapping_result["draft_mapping"])
-    traded = save_user_draft_picks(conn, league_id, current_draft, snapshot.get("traded_picks") or [])
+    active_draft_id = (current_draft or {}).get("draft_id")
+    save_draft_slots(conn, league_id, mapping_result["draft_mapping"], active_draft_id)
+    league_trades = safe_client_list(sleeper, "league_traded_picks", league_id)
+    traded_imported = save_traded_picks(conn, league_id, None, league_trades)
+    traded_imported += save_draft_traded_picks(conn, league_id, drafts, sleeper)
+    traded = save_user_draft_picks(conn, league_id, current_draft, load_traded_picks(conn, league_id, active_draft_id))
     previous_count = import_previous_drafts(conn, league, sleeper)
     tendencies = calculate_manager_tendencies(conn, league_id)
+    draft_count = conn.execute("SELECT COUNT(*) AS count FROM league_drafts WHERE league_id = ?", (league_id,)).fetchone()["count"]
+    draft_pick_count = conn.execute("SELECT COUNT(*) AS count FROM league_draft_picks WHERE league_id = ?", (league_id,)).fetchone()["count"]
+    traded_pick_count = conn.execute("SELECT COUNT(*) AS count FROM league_traded_picks WHERE league_id = ?", (league_id,)).fetchone()["count"]
     return {
         "league_settings": db.get_league_settings(conn).to_dict(),
         "league": league_summary(league),
+        "users_imported": managers,
+        "rosters_imported": managers,
         "managers_imported": managers,
-        "drafts_imported": len(drafts),
-        "draft_picks_imported": sum(int(item.get("_pick_count") or 0) for item in drafts),
+        "drafts_imported": draft_count,
+        "current_drafts_imported": len(drafts),
+        "draft_picks_imported": draft_pick_count,
         "previous_drafts_imported": previous_count,
-        "traded_picks_found": len(snapshot.get("traded_picks") or []),
-        "traded_pick_note": None if snapshot.get("traded_picks") else "Traded pick data was not found; default snake draft picks were generated.",
+        "traded_picks_found": traded_pick_count,
+        "traded_picks_imported": traded_pick_count,
+        "traded_pick_note": None if traded_pick_count else "Traded pick data was not found; default snake draft picks were generated.",
         "user_draft_picks_imported": traded,
-        "draft_mapping": draft_mapping_for_league(conn, league_id),
+        "active_draft_id": active_draft_id,
+        "draft_mapping": draft_mapping_for_league(conn, league_id, active_draft_id),
         "draft_mapping_source": mapping_result["source"],
         "draft_mapping_warnings": mapping_result["warnings"],
         "manager_tendencies": tendencies,
@@ -212,19 +225,28 @@ def save_draft(conn: sqlite3.Connection, league_id: str, draft: dict[str, Any]) 
     conn.commit()
 
 
-def save_draft_slots(conn: sqlite3.Connection, league_id: str, draft_mapping: list[dict[str, Any]]) -> None:
-    conn.execute("DELETE FROM draft_slots WHERE league_id = ?", (league_id,))
+def save_draft_slots(
+    conn: sqlite3.Connection,
+    league_id: str,
+    draft_mapping: list[dict[str, Any]],
+    draft_id: str | None = None,
+) -> None:
+    if draft_id:
+        conn.execute("DELETE FROM draft_slots WHERE league_id = ? AND (draft_id = ? OR draft_id IS NULL)", (league_id, draft_id))
+    else:
+        conn.execute("DELETE FROM draft_slots WHERE league_id = ? AND draft_id IS NULL", (league_id,))
     for row in sorted(draft_mapping, key=lambda item: int(item.get("draft_slot") or 9999)):
         draft_slot = row.get("draft_slot")
         if not draft_slot:
             continue
         conn.execute(
             """
-            INSERT INTO draft_slots (league_id, roster_id, sleeper_user_id, manager_name, draft_slot)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO draft_slots (league_id, draft_id, roster_id, sleeper_user_id, manager_name, draft_slot)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 league_id,
+                draft_id,
                 optional_int(row.get("roster_id")),
                 row.get("sleeper_user_id"),
                 row.get("team_name") or row.get("display_name") or row.get("manager_name"),
@@ -439,13 +461,23 @@ def draft_team_count(
     return next((int(value) for value in values if value), 10)
 
 
-def draft_mapping_for_league(conn: sqlite3.Connection, league_id: str) -> list[dict[str, Any]]:
+def draft_mapping_for_league(
+    conn: sqlite3.Connection,
+    league_id: str,
+    draft_id: str | None = None,
+) -> list[dict[str, Any]]:
+    draft_filter = ""
+    params: list[Any] = [league_id]
+    if draft_id:
+        draft_filter = "AND (ds.draft_id = ? OR ds.draft_id IS NULL)"
+        params.append(draft_id)
     return [
         dict(row)
         for row in conn.execute(
-            """
+            f"""
             SELECT
                 ds.draft_slot,
+                ds.draft_id,
                 ds.roster_id,
                 ds.sleeper_user_id,
                 COALESCE(lm.display_name, ds.manager_name) AS display_name,
@@ -461,9 +493,10 @@ def draft_mapping_for_league(conn: sqlite3.Connection, league_id: str) -> list[d
                     OR (ds.roster_id IS NULL AND ds.sleeper_user_id IS NOT NULL AND lm.sleeper_user_id = ds.sleeper_user_id)
                 )
             WHERE ds.league_id = ?
+            {draft_filter}
             ORDER BY ds.draft_slot
             """,
-            (league_id,),
+            params,
         ).fetchall()
     ]
 
@@ -504,11 +537,12 @@ def update_draft_slots(conn: sqlite3.Connection, league_id: str, slots: list[dic
                 "source": "manual",
             }
         )
-    save_draft_slots(conn, league_id, mapping)
     latest_draft = latest_draft_for_league(conn, league_id)
+    draft_id = latest_draft["draft_id"] if latest_draft else None
+    save_draft_slots(conn, league_id, mapping, draft_id)
     if latest_draft:
-        save_user_draft_picks(conn, league_id, json.loads(latest_draft["raw_json"] or "{}"), [])
-    return {"draft_mapping": draft_mapping_for_league(conn, league_id)}
+        save_user_draft_picks(conn, league_id, json.loads(latest_draft["raw_json"] or "{}"), load_traded_picks(conn, league_id, draft_id))
+    return {"draft_mapping": draft_mapping_for_league(conn, league_id, draft_id)}
 
 
 def optional_int(value: Any) -> int | None:
@@ -518,6 +552,100 @@ def optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def save_draft_traded_picks(
+    conn: sqlite3.Connection,
+    league_id: str,
+    drafts: list[dict[str, Any]],
+    sleeper: SleeperClient,
+) -> int:
+    imported = 0
+    for draft in drafts:
+        draft_id = draft.get("draft_id")
+        if not draft_id:
+            continue
+        imported += save_traded_picks(conn, league_id, draft_id, safe_client_list(sleeper, "draft_traded_picks", draft_id))
+    return imported
+
+
+def save_traded_picks(
+    conn: sqlite3.Connection,
+    league_id: str,
+    draft_id: str | None,
+    traded_picks: list[dict[str, Any]],
+) -> int:
+    if draft_id:
+        conn.execute(
+            "DELETE FROM league_traded_picks WHERE league_id = ? AND draft_id = ?",
+            (league_id, draft_id),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM league_traded_picks WHERE league_id = ? AND draft_id IS NULL",
+            (league_id,),
+        )
+    imported = 0
+    for item in traded_picks:
+        original_roster_id = optional_int(item.get("roster_id") or item.get("original_roster_id"))
+        current_roster_id = optional_int(item.get("owner_id") or item.get("current_roster_id"))
+        conn.execute(
+            """
+            INSERT INTO league_traded_picks (
+                league_id, draft_id, season, round, roster_id, previous_owner_id,
+                owner_id, original_roster_id, current_roster_id, raw_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                league_id,
+                draft_id,
+                str(item.get("season") or ""),
+                optional_int(item.get("round")),
+                original_roster_id,
+                optional_int(item.get("previous_owner_id")),
+                current_roster_id,
+                original_roster_id,
+                current_roster_id,
+                json.dumps(item),
+            ),
+        )
+        imported += 1
+    conn.commit()
+    return imported
+
+
+def safe_client_list(client: Any, method_name: str, *args: Any) -> list[dict[str, Any]]:
+    method = getattr(client, method_name, None)
+    if not method:
+        return []
+    try:
+        payload = method(*args)
+    except ProviderError:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def load_traded_picks(
+    conn: sqlite3.Connection,
+    league_id: str,
+    draft_id: str | None = None,
+) -> list[dict[str, Any]]:
+    params: list[Any] = [league_id]
+    draft_filter = ""
+    if draft_id:
+        draft_filter = "AND (draft_id = ? OR draft_id IS NULL)"
+        params.append(draft_id)
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM league_traded_picks
+        WHERE league_id = ? {draft_filter}
+        ORDER BY season, round, roster_id, id
+        """,
+        params,
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def save_draft_picks(conn: sqlite3.Connection, league_id: str, draft_id: str, picks: list[dict[str, Any]]) -> None:
@@ -575,50 +703,33 @@ def save_user_draft_picks(
     if not draft:
         return 0
     settings = draft.get("settings") or {}
+    draft_id = draft.get("draft_id")
+    season = str(draft.get("season") or "")
     teams = int(settings.get("teams") or count_league_teams(conn, league_id) or 10)
     rounds = int(settings.get("rounds") or 16)
-    season = str(draft.get("season") or "")
-    slot_rows = conn.execute("SELECT * FROM draft_slots WHERE league_id = ?", (league_id,)).fetchall()
-    roster_by_slot = {int(row["draft_slot"]): int(row["roster_id"]) for row in slot_rows if row["draft_slot"] and row["roster_id"]}
-    managers = managers_by_roster(conn, league_id)
+    slot_rows = conn.execute(
+        """
+        SELECT *
+        FROM draft_slots
+        WHERE league_id = ? AND (draft_id = ? OR draft_id IS NULL)
+        ORDER BY draft_slot
+        """,
+        (league_id, draft_id),
+    ).fetchall()
+    managers = [dict(row) for row in conn.execute("SELECT * FROM league_managers WHERE league_id = ?", (league_id,)).fetchall()]
     my_roster = current_my_manager(conn, league_id)
-    trades = {
-        (int(item.get("round") or 0), int(item.get("roster_id") or 0)): int(item.get("owner_id") or 0)
-        for item in traded_picks
-        if not season or str(item.get("season") or season) == season
-    }
-    conn.execute("DELETE FROM user_draft_picks WHERE league_id = ?", (league_id,))
-    imported = 0
-    for round_no in range(1, rounds + 1):
-        for draft_slot in range(1, teams + 1):
-            pick_no = snake_pick_no(round_no, draft_slot, teams)
-            original_roster = roster_by_slot.get(draft_slot)
-            current_roster = trades.get((round_no, original_roster or 0), original_roster)
-            manager = managers.get(current_roster or -1, {})
-            conn.execute(
-                """
-                INSERT INTO user_draft_picks (
-                    league_id, round, pick_no, draft_slot, original_roster_id,
-                    current_roster_id, manager_name, is_mine, source, raw_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    league_id,
-                    round_no,
-                    pick_no,
-                    draft_slot,
-                    original_roster,
-                    current_roster,
-                    manager.get("team_name") or manager.get("display_name"),
-                    1 if my_roster and current_roster == my_roster["roster_id"] else 0,
-                    "sleeper_traded_picks" if (round_no, original_roster or 0) in trades else "snake",
-                    json.dumps({"traded_picks_found": bool(traded_picks)}),
-                ),
-            )
-            imported += 1
-    conn.commit()
-    return imported
+    picks = calculate_pick_ownership(
+        league_id,
+        draft_id,
+        season,
+        managers,
+        [dict(row) for row in slot_rows],
+        traded_picks,
+        teams,
+        rounds,
+        int(my_roster["roster_id"]) if my_roster else None,
+    )
+    return save_pick_ownership(conn, league_id, draft_id, season, picks)
 
 
 def import_previous_drafts(conn: sqlite3.Connection, league: dict[str, Any], sleeper: SleeperClient, depth: int = 3) -> int:
@@ -632,6 +743,7 @@ def import_previous_drafts(conn: sqlite3.Connection, league: dict[str, Any], sle
             previous_league = sleeper.league(previous_id)
             previous_drafts = sleeper.drafts(previous_id)
             imported_drafts = save_drafts_and_picks(conn, root_league_id, previous_drafts, sleeper)
+            save_draft_traded_picks(conn, root_league_id, imported_drafts, sleeper)
             imported += len(imported_drafts)
             previous_id = previous_league.get("previous_league_id")
         except ProviderError:
@@ -647,10 +759,21 @@ def set_my_team(conn: sqlite3.Connection, league_id: str, roster_id: int) -> dic
     )
     conn.commit()
     latest_draft = latest_draft_for_league(conn, league_id)
+    draft_slot = conn.execute(
+        """
+        SELECT draft_slot
+        FROM draft_slots
+        WHERE league_id = ? AND roster_id = ?
+        ORDER BY CASE WHEN draft_id = ? THEN 0 ELSE 1 END, id DESC
+        LIMIT 1
+        """,
+        (league_id, roster_id, latest_draft["draft_id"] if latest_draft else None),
+    ).fetchone()
+    if draft_slot and draft_slot["draft_slot"]:
+        db.update_league_settings(conn, {"draft_slot": int(draft_slot["draft_slot"])})
     if latest_draft:
         raw = json.loads(latest_draft["raw_json"] or "{}")
-        traded = []
-        save_user_draft_picks(conn, league_id, raw, traded)
+        save_user_draft_picks(conn, league_id, raw, load_traded_picks(conn, league_id, latest_draft["draft_id"]))
     return current_my_manager(conn, league_id) or {}
 
 

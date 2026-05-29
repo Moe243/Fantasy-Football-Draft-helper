@@ -307,13 +307,14 @@ function draftCell(pick) {
     : `<strong>Pick ${escapeHtml(pick.pick_no)}</strong><span>${escapeHtml(pick.manager_name || "Open")}</span>`;
   const keeper = pick.is_keeper ? `<span class="tag fit">Keeper</span>` : "";
   const practice = pick.practice_source ? `<span class="tag position">${escapeHtml(pick.practice_source)}</span>` : "";
+  const traded = pick.is_traded ? `<span class="tag traded-tag">Traded</span>` : "";
   const current = pick.is_current_pick ? `<span class="tag current-tag">${pick.is_mine ? "My pick" : "Current"}</span>` : "";
   const remove = player && !pick.is_keeper ? `<button class="text-button remove-pick-button" data-remove-board-pick="${escapeHtml(pick.pick_no)}">Remove</button>` : "";
   return `
     <div class="${classes.join(" ")}">
       <span class="pick-meta">Pick ${escapeHtml(pick.pick_no)} · Slot ${escapeHtml(pick.draft_slot)}</span>
       ${playerLabel}
-      <div class="pick-tags">${current}${keeper}${practice}${remove}</div>
+      <div class="pick-tags">${current}${keeper}${traded}${practice}${remove}</div>
     </div>
   `;
 }
@@ -561,10 +562,15 @@ function renderDraftOrderMapping() {
   }
   container.innerHTML = `
     <div class="draft-order-grid">
+      <div class="draft-order-row header">
+        <span>Draft Slot</span>
+        <span>Manager</span>
+        <span>Team Name</span>
+        <span>Roster ID</span>
+        <span>Sleeper User ID</span>
+      </div>
       ${mapping.map((item) => `
         <label class="draft-order-row">
-          <span>${escapeHtml(item.team_name || item.manager_name || item.display_name || `Roster ${item.roster_id || ""}`)}</span>
-          <small>${escapeHtml(item.display_name || "")}${item.roster_id ? ` · Roster ${escapeHtml(item.roster_id)}` : ""}</small>
           <input
             class="draft-slot-input"
             type="number"
@@ -576,6 +582,10 @@ function renderDraftOrderMapping() {
             data-display-name="${escapeHtml(item.display_name || "")}"
             data-team-name="${escapeHtml(item.team_name || item.manager_name || "")}"
           />
+          <span>${escapeHtml(item.display_name || item.manager_name || `Roster ${item.roster_id || ""}`)}</span>
+          <span>${escapeHtml(item.team_name || item.manager_name || "")}</span>
+          <small>${escapeHtml(item.roster_id || "")}</small>
+          <small>${escapeHtml(item.sleeper_user_id || "")}</small>
         </label>
       `).join("")}
     </div>
@@ -591,9 +601,12 @@ function renderImportStatus() {
     statusLine("Players loaded", state.setupStatus?.players_loaded ?? state.players.length),
     statusLine("Latest player import", latest ? `${latest.records_imported} records · ${latest.status}` : "Not run yet"),
     statusLine("League imported", league?.league?.name || "No league imported"),
-    statusLine("Managers imported", league?.managers_imported ?? 0),
+    statusLine("Active draft ID", league?.active_draft_id || "None"),
+    statusLine("Users imported", league?.users_imported ?? league?.managers_imported ?? 0),
+    statusLine("Rosters imported", league?.rosters_imported ?? league?.managers_imported ?? 0),
     statusLine("Drafts imported", league?.drafts_imported ?? 0),
     statusLine("Draft picks imported", league?.draft_picks_imported ?? 0),
+    statusLine("Traded picks imported", league?.traded_picks_imported ?? 0),
   ];
   container.innerHTML = lines.join("");
 }
@@ -700,7 +713,7 @@ async function refreshDraftState() {
 function applyDraftState(payload) {
   state.draftState = payload;
   state.draftBoard = payload;
-  state.draftMapping = payload.draft_order || state.draftMapping || [];
+  state.draftMapping = payload.draft_mapping || payload.draft_order || state.draftMapping || [];
   state.currentPick = payload.current_pick || 1;
   state.currentPickTeam = payload.current_pick_team || null;
   state.isMyPick = Boolean(payload.is_my_pick);

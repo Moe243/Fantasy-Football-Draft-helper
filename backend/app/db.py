@@ -169,19 +169,37 @@ def init_db(conn: sqlite3.Connection) -> None:
             UNIQUE(draft_id, pick_no)
         );
 
+        CREATE TABLE IF NOT EXISTS league_traded_picks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id TEXT NOT NULL,
+            draft_id TEXT,
+            season TEXT,
+            round INTEGER,
+            roster_id INTEGER,
+            previous_owner_id INTEGER,
+            owner_id INTEGER,
+            original_roster_id INTEGER,
+            current_roster_id INTEGER,
+            raw_json TEXT,
+            imported_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS draft_slots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             league_id TEXT NOT NULL,
+            draft_id TEXT,
             roster_id INTEGER,
             sleeper_user_id TEXT,
             manager_name TEXT,
             draft_slot INTEGER,
-            UNIQUE(league_id, draft_slot)
+            UNIQUE(league_id, draft_id, draft_slot)
         );
 
         CREATE TABLE IF NOT EXISTS user_draft_picks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             league_id TEXT NOT NULL,
+            draft_id TEXT,
+            season TEXT,
             round INTEGER NOT NULL,
             pick_no INTEGER NOT NULL,
             draft_slot INTEGER,
@@ -303,6 +321,15 @@ def init_db(conn: sqlite3.Connection) -> None:
             "raw_json": "TEXT",
         },
     )
+    migrate_draft_slots(conn)
+    ensure_columns(
+        conn,
+        "user_draft_picks",
+        {
+            "draft_id": "TEXT",
+            "season": "TEXT",
+        },
+    )
     default_settings = LeagueSettings()
     conn.execute(
         """
@@ -319,6 +346,31 @@ def init_db(conn: sqlite3.Connection) -> None:
         ),
     )
     conn.commit()
+
+
+def migrate_draft_slots(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(draft_slots)").fetchall()}
+    if "draft_id" in columns:
+        return
+    conn.executescript(
+        """
+        ALTER TABLE draft_slots RENAME TO draft_slots_old;
+        CREATE TABLE draft_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id TEXT NOT NULL,
+            draft_id TEXT,
+            roster_id INTEGER,
+            sleeper_user_id TEXT,
+            manager_name TEXT,
+            draft_slot INTEGER,
+            UNIQUE(league_id, draft_id, draft_slot)
+        );
+        INSERT INTO draft_slots (league_id, draft_id, roster_id, sleeper_user_id, manager_name, draft_slot)
+        SELECT league_id, NULL, roster_id, sleeper_user_id, manager_name, draft_slot
+        FROM draft_slots_old;
+        DROP TABLE draft_slots_old;
+        """
+    )
 
 
 def ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
