@@ -810,17 +810,6 @@ async function refreshLeagueManagers() {
   }
   renderMyTeamSelect();
   renderDraftOrderMapping();
-  const keeperSelect = $("#keeper-manager");
-  if (keeperSelect) {
-    keeperSelect.innerHTML = state.managers.length
-      ? state.managers
-          .map(
-            (row) =>
-              `<option value="${escapeHtml(row.roster_id)}">${escapeHtml(row.manager_name || row.team_name || row.display_name)}</option>`,
-          )
-          .join("")
-      : '<option value="">Import league first</option>';
-  }
 }
 
 async function refreshDraftBoard() {
@@ -951,6 +940,51 @@ document.addEventListener("click", async (event) => {
   if (target.id === "refresh-waivers") {
     await refreshWaivers();
     toast("Waiver watchlist refreshed.");
+    return;
+  }
+
+  if (target.id === "import-nfl-stats") {
+    const status = $("#nfl-stats-import-status");
+    const season = $("#nfl-stats-season")?.value;
+    const sourceUrl = $("#nfl-stats-source-url")?.value?.trim();
+    if (!sourceUrl) {
+      toast("Enter a source URL for NFL stats.");
+      return;
+    }
+    target.disabled = true;
+    if (status) status.innerHTML = emptyState("Importing NFL stats...");
+    try {
+      const result = await api("/api/integrations/nfl/stats/import", {
+        method: "POST",
+        body: JSON.stringify({
+          source_url: sourceUrl,
+          season: season ? Number(season) : undefined,
+          source_name: "nflfastR",
+        }),
+      });
+      const failedPreview = (result.failed_rows || [])
+        .slice(0, 5)
+        .map(
+          (row) =>
+            `<div class="compact-row"><span>Row ${escapeHtml(row.row)} · ${escapeHtml(row.player_name || "Unknown")}</span><span>${escapeHtml(row.reason)}</span></div>`,
+        )
+        .join("");
+      if (status) {
+        status.innerHTML = `
+          <div class="compact-row"><span>Imported</span><strong>${escapeHtml(result.imported_count)}</strong></div>
+          <div class="compact-row"><span>Failed</span><strong>${escapeHtml(result.failed_count)}</strong></div>
+          ${failedPreview || ""}`;
+      }
+      toast(`Imported ${result.imported_count} NFL stat rows (${result.failed_count} failed).`);
+      if (state.selectedPlayer?.player?.internal_player_id) {
+        await loadPlayerDetail(state.selectedPlayer.player.internal_player_id);
+      }
+    } catch (error) {
+      if (status) status.innerHTML = emptyState(error.message || "Import failed.");
+      toast(error.message || "NFL stats import failed.");
+    } finally {
+      target.disabled = false;
+    }
     return;
   }
 

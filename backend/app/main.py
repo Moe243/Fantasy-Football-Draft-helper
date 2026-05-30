@@ -20,21 +20,12 @@ from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
 from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
-from .services.data_imports import import_prop_rows, import_stat_rows
-from .services.data_sources import data_sources_status
+from .providers.nfl_data import NFLStatsProvider
+from .services.data_imports import import_nfl_public_stat_rows, import_prop_rows, import_stat_rows
 from .services.draft_board import get_draft_board
 from .services.draft_history import draft_history_summary
-from .services.draft_room import get_draft_state, league_draft_recommendations, make_draft_pick, remove_draft_pick
-from .services.league_import import (
-    draft_mapping_for_league,
-    list_managers_for_setup,
-    reset_manager_display_names,
-    set_my_team,
-    update_draft_slots,
-    update_manager_display_names,
-)
-from .services.odds_import import import_event_props, import_nfl_odds, list_odds_events
-from .services.personal_tendencies import calculate_user_tendencies
+from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
+from .services.league_import import draft_mapping_for_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
 from .services.practice_draft import (
     get_current_practice,
@@ -53,15 +44,8 @@ from .services.recommendations import (
 )
 from .services.sleeper_import import import_sleeper_players
 from .services.sleeper_draft_import import import_league_draft_data
-from .services.sleeper_projections_import import import_sleeper_projections
 from .services.startup import ensure_sleeper_players
-from .services.user_preferences import (
-    add_favorite,
-    get_draft_preferences,
-    list_favorites,
-    remove_favorite,
-    save_draft_preferences,
-)
+
 
 def json_default(value: Any) -> Any:
     if hasattr(value, "to_dict"):
@@ -122,10 +106,6 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 "latest_player_import": dict(latest_players) if latest_players else None,
                 "league": league_status(conn, league_id) if league_id else None,
             }
-
-
-        if method == "GET" and path == "/api/setup/data-sources":
-            return data_sources_status(conn)
 
         if method == "GET" and path == "/api/architecture":
             return {
@@ -188,25 +168,7 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
         if method == "GET" and path == "/api/league/managers":
             league_id = require_query(query, "league_id")
-            return {"managers": list_managers_for_setup(conn, league_id)}
-
-        if method == "POST" and path == "/api/league/managers/update":
-            payload = self.read_json()
-            league_id = require(payload, "league_id")
-            roster_id = int(require(payload, "roster_id"))
-            return update_manager_display_names(
-                conn,
-                league_id,
-                roster_id,
-                local_display_name=payload.get("local_display_name"),
-                local_team_name=payload.get("local_team_name"),
-            )
-
-        if method == "POST" and path == "/api/league/managers/reset":
-            payload = self.read_json()
-            league_id = require(payload, "league_id")
-            roster_id = int(require(payload, "roster_id"))
-            return reset_manager_display_names(conn, league_id, roster_id)
+            return {"managers": league_managers(conn, league_id)}
 
         if method == "POST" and path == "/api/league/my-team":
             payload = self.read_json()
@@ -224,28 +186,27 @@ class FantasyHandler(BaseHTTPRequestHandler):
             return {**updated, "draft_state": get_draft_state(conn, league_id)}
 
         if path == "/api/keepers":
-            from .services.keepers import add_keeper, list_keepers, remove_keeper
             if method == "GET":
-                league_id = first(query, "league_id")
-                return {"keepers": list_keepers(conn, league_id)}
+                return {"keepers": [enrich_keeper(conn, keeper) for keeper in keepers]}
             if method == "POST":
                 payload = self.read_json()
-                league_id = require(payload, "league_id")
-                validate_player_id(conn, require(payload, "player_id"))
-                return add_keeper(
-                    conn,
-                    league_id,
-                    require(payload, "player_id"),
-                    roster_id=optional_int(payload.get("roster_id")),
-                    sleeper_user_id=payload.get("sleeper_user_id"),
-                    round_no=optional_int(payload.get("round")) or 15,
+                keeper = Keeper(
+                    player_id=require(payload, "player_id"),
+                    team_name=str(payload.get("team_name") or "Unknown team"),
+                    round=optional_int(payload.get("round")),
                     pick_no=optional_int(payload.get("pick_no")),
                 )
+                validate_player_id(conn, keeper.player_id)
+                db.upsert_keeper(conn, keeper)
+                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
             if method == "DELETE":
-                league_id = require_query(query, "league_id")
-                player_id = require_query(query, "player_id")
-                roster_id = optional_int(require_query(query, "roster_id"))
-                return remove_keeper(conn, league_id, player_id, roster_id)
+                player_id = first(query, "player_id")
+                team_name = first(query, "team_name")
+                if player_id and team_name:
+                    db.delete_keeper(conn, player_id, team_name)
+                else:
+                    db.clear_keepers(conn)
+                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
 
         if path == "/api/draft/picks":
             if method == "GET":
@@ -270,19 +231,8 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 return {"picks": [enrich_pick(conn, item) for item in db.get_draft_picks(conn)]}
 
         if method == "GET" and path == "/api/draft/recommendations":
-            limit = int(first(query, "limit") or "30")
+            limit = int(first(query, "limit") or "12")
             manager = first(query, "manager") or "me"
-            league_id = first(query, "league_id")
-            pick_no = optional_int(first(query, "pick_no"))
-            position = first(query, "position")
-            if league_id and db.has_database_players(conn):
-                return league_draft_recommendations(
-                    conn,
-                    league_id,
-                    pick_no=pick_no,
-                    limit=limit,
-                    position=position,
-                )
             if db.has_database_players(conn):
                 recs = database_draft_recommendations(
                     conn,
@@ -291,11 +241,10 @@ class FantasyHandler(BaseHTTPRequestHandler):
                     picks,
                     limit=limit,
                     manager=manager,
-                    position=position,
+                    position=first(query, "position"),
                     search=first(query, "search"),
                     hide_drafted=bool_query(first(query, "hide_drafted"), default=True),
                     hide_keepers=bool_query(first(query, "hide_keepers"), default=True),
-                    league_id=league_id,
                 )
                 return {
                     "current_pick": current_pick_number(picks, keepers),
@@ -406,6 +355,23 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 raise ValueError("rows must be a list")
             return import_prop_rows(conn, require(payload, "source_name"), payload.get("sportsbook"), rows)
 
+
+        if method == "POST" and path == "/api/integrations/nfl/stats/import":
+            payload = self.read_json()
+            source_name = str(payload.get("source_name") or "nflfastR")
+            season = payload.get("season")
+            provider = NFLStatsProvider(
+                source_url=payload.get("source_url"),
+                season=season,
+            )
+            rows = provider.fetch_rows()
+            return import_nfl_public_stat_rows(
+                conn,
+                source_name,
+                rows,
+                default_season=optional_int(season) if season is not None else None,
+            )
+
         if method == "POST" and path == "/api/practice/start":
             payload = self.read_json()
             return start_practice(conn, require(payload, "league_id"), payload.get("name"))
@@ -426,56 +392,6 @@ class FantasyHandler(BaseHTTPRequestHandler):
         if method == "DELETE" and path == "/api/practice/reset":
             league_id = require_query(query, "league_id")
             return reset_practice(conn, league_id)
-
-        if method == "GET" and path == "/api/user/favorites":
-            return {"favorites": list_favorites(conn, require_query(query, "league_id"))}
-
-        if method == "POST" and path == "/api/user/favorites":
-            payload = self.read_json()
-            return add_favorite(
-                conn,
-                require(payload, "league_id"),
-                require(payload, "player_id"),
-                payload.get("notes"),
-            )
-
-        if method == "DELETE" and path == "/api/user/favorites":
-            return remove_favorite(
-                conn,
-                require_query(query, "league_id"),
-                require_query(query, "player_id"),
-            )
-
-        if method == "GET" and path == "/api/user/draft-preferences":
-            return get_draft_preferences(conn, require_query(query, "league_id"))
-
-        if method == "POST" and path == "/api/user/draft-preferences":
-            payload = self.read_json()
-            return save_draft_preferences(conn, require(payload, "league_id"), payload)
-
-        if method == "POST" and path == "/api/user/tendencies/calculate":
-            payload = self.read_json()
-            return calculate_user_tendencies(conn, require(payload, "league_id"))
-
-        if method == "POST" and path == "/api/integrations/odds/import":
-            return import_nfl_odds(conn)
-
-        if method == "POST" and path == "/api/integrations/odds/props/import":
-            payload = self.read_json()
-            return import_event_props(
-                conn,
-                require(payload, "event_id"),
-                str(payload.get("markets") or "player_pass_yds,player_rush_yds,player_reception_yds"),
-            )
-
-        if method == "GET" and path == "/api/integrations/odds/events":
-            return {"events": list_odds_events(conn)}
-
-        if method == "POST" and path == "/api/integrations/sleeper/projections/import":
-            payload = self.read_json()
-            season = int(payload.get("season") or 2025)
-            week = int(payload.get("week") or 1)
-            return import_sleeper_projections(conn, season=season, week=week)
 
         if method == "GET" and path == "/api/integrations/odds/nfl":
             return {"games": OddsClient().fetch_nfl_odds()}
