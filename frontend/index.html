@@ -251,6 +251,20 @@
           </div>
 
           <div class="setup-grid">
+            <section class="panel" style="grid-column: 1 / -1">
+              <h3>Universal Import</h3>
+              <p class="helper-copy">Drop or upload a CSV or JSON file. The app detects rankings, stats, projections, or props automatically.</p>
+              <div
+                id="universal-import-dropzone"
+                style="border: 2px dashed var(--line); border-radius: 12px; padding: 2.5rem 1.5rem; text-align: center; cursor: pointer; margin: 12px 0"
+              >
+                <p style="margin: 0">Drop any fantasy football file here<br />or click to browse</p>
+              </div>
+              <input type="file" id="universal-import-file" accept=".csv,.json" hidden />
+              <div id="universal-import-status" class="compact-list setup-status"></div>
+              <div id="universal-import-results" class="compact-list setup-status"></div>
+            </section>
+
             <section class="panel">
               <h3>League Settings</h3>
               <form id="settings-form" class="stack-form">
@@ -302,16 +316,6 @@
                 <div id="draft-order-mapping" class="compact-list"></div>
               </div>
               <p class="helper-copy">Sleeper can import league settings, rosters, users, draft metadata, and picks. Manual keeper entry stays available when keeper slots are not encoded cleanly.</p>
-            </section>
-
-            <section class="panel">
-              <h3>FantasyPros Rankings Import</h3>
-              <div class="stack-form">
-                <label for="fp-csv-upload">Upload FantasyPros CSV export</label>
-                <input type="file" id="fp-csv-upload" accept=".csv" />
-                <button type="button" class="primary-button" id="fp-import-btn">Import Rankings</button>
-                <div id="fp-import-status" class="compact-list setup-status"></div>
-              </div>
             </section>
 
             <section class="panel">
