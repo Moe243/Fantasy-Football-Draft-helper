@@ -305,6 +305,44 @@
             </section>
 
             <section class="panel">
+              <h3>FantasyPros Rankings Import</h3>
+              <form id="fantasypros-import-form" class="stack-form">
+                <label>
+                  Position
+                  <select id="fantasypros-position">
+                    <option value="">Overall</option>
+                    <option value="QB">QB</option>
+                    <option value="RB">RB</option>
+                    <option value="WR">WR</option>
+                    <option value="TE">TE</option>
+                  </select>
+                </label>
+                <label>
+                  Rankings JSON
+                  <textarea id="fantasypros-json" rows="8" spellcheck="false" placeholder="Paste FantasyPros JSON rows here"></textarea>
+                </label>
+                <details class="format-helper">
+                  <summary>Show expected format</summary>
+                  <pre class="format-example">[
+  {
+    "player_name": "Ja'Marr Chase",
+    "team": "CIN",
+    "position": "WR",
+    "overall_rank": 2,
+    "position_rank": "WR1",
+    "adp": 2.6,
+    "projected_points": 304.8,
+    "tier": 1,
+    "bye_week": 10
+  }
+]</pre>
+                </details>
+                <button type="submit" class="primary-button">Import FantasyPros Rankings</button>
+              </form>
+              <div id="fantasypros-import-status" class="compact-list setup-status"></div>
+            </section>
+
+            <section class="panel">
               <h3>Rankings JSON</h3>
               <form id="rankings-form" class="stack-form">
                 <label>
@@ -417,26 +455,6 @@
     </div>
 
     <datalist id="player-options"></datalist>
-
-    <div id="draft-pick-modal" class="draft-pick-modal hidden" aria-hidden="true">
-      <div class="draft-pick-modal-backdrop" data-close-board-pick></div>
-      <div class="draft-pick-modal-panel" role="dialog" aria-labelledby="board-pick-modal-title">
-        <h3 id="board-pick-modal-title">Assign Pick</h3>
-        <p id="board-pick-modal-meta" class="helper-copy"></p>
-        <p id="board-pick-current-player" class="board-pick-current-player"></p>
-        <div id="board-pick-suggestions" class="board-pick-suggestions"></div>
-        <label class="stack-form">
-          Player
-          <input list="player-options" id="board-pick-player" placeholder="Search or select a player" autocomplete="off" />
-        </label>
-        <div class="button-row">
-          <button type="button" class="primary-button" id="save-board-pick">Save</button>
-          <button type="button" class="ghost-button" id="remove-board-pick">Remove</button>
-          <button type="button" class="ghost-button" id="cancel-board-pick">Cancel</button>
-        </div>
-      </div>
-    </div>
-
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" defer></script>
   </body>
