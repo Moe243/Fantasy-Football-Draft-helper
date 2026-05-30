@@ -984,3 +984,12 @@ textarea {
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
+.pick-filter.active { border-color: var(--accent); color: var(--accent); }
+.pick-sheet-meta { margin: 0.2rem 0; font-size: 0.85rem; color: var(--muted); }
+.pick-sheet-why { margin-top: 0.35rem; font-size: 0.85rem; }
+.pick-sheet-why ul { margin: 0.35rem 0 0.5rem 1rem; padding: 0; }
+.signal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.25rem 0.75rem; font-size: 0.8rem; }
+.manager-names-table { overflow-x: auto; }
+.advanced-block { margin-top: 0.75rem; }
+.nested-panel { margin-top: 0.75rem; }
+

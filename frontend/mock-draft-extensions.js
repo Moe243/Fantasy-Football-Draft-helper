@@ -1,3 +1,5 @@
+const PICK_SHEET_POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DEF", "K"];
+
 async function refreshFavorites() {
   if (!state.leagueId) return;
   const payload = await api(`/api/user/favorites?league_id=${encodeURIComponent(state.leagueId)}`);
@@ -32,11 +34,79 @@ async function refreshPreferences() {
   if ($("#pref-value-bias")) $("#pref-value-bias").value = prefs.value_bias ?? 0;
 }
 
+async function refreshManagerNamesTable() {
+  const table = $("#manager-names-table");
+  if (!table || !state.leagueId) return;
+  const payload = await api(`/api/league/managers?league_id=${encodeURIComponent(state.leagueId)}`);
+  const managers = payload.managers || [];
+  if (!managers.length) {
+    table.innerHTML = emptyState("Import your Sleeper league to edit manager and team names.");
+    return;
+  }
+  table.innerHTML = `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Draft Slot</th>
+          <th>Sleeper Username</th>
+          <th>Custom Manager Name</th>
+          <th>Custom Team Name</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${managers
+          .map((row) => {
+            const slot = row.draft_slot ?? "—";
+            return `<tr data-roster-id="${escapeHtml(row.roster_id)}">
+              <td>${escapeHtml(slot)}</td>
+              <td>${escapeHtml(row.sleeper_display_name || row.display_name || "")}</td>
+              <td><input class="manager-local-display" value="${escapeHtml(row.custom_manager_name || row.local_display_name || "")}" /></td>
+              <td><input class="manager-local-team" value="${escapeHtml(row.custom_team_name || row.local_team_name || "")}" /></td>
+              <td class="button-row">
+                <button type="button" class="ghost-button small-button" data-save-manager="${escapeHtml(row.roster_id)}">Save</button>
+                <button type="button" class="text-button small-button" data-reset-manager="${escapeHtml(row.roster_id)}">Reset</button>
+              </td>
+            </tr>`;
+          })
+          .join("")}
+      </tbody>
+    </table>`;
+}
+
+function historyLine(history, season) {
+  const entry = history?.[String(season)];
+  if (!entry || (entry.rank == null && entry.fantasy_points == null)) {
+    return `No ${season} history imported`;
+  }
+  const rank = entry.rank != null ? `Rank ${entry.rank}` : "Rank —";
+  const pts = entry.fantasy_points != null ? `${Number(entry.fantasy_points).toFixed(1)} pts` : "— pts";
+  return `${rank} / ${pts}`;
+}
+
+function propsLine(props) {
+  if (!props?.length) return "No 2026 props imported";
+  return props
+    .slice(0, 4)
+    .map((p) => `${String(p.market || "").replace(/_/g, " ")} ${p.line ?? ""}`.trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
+function signalsHtml(signals) {
+  if (!signals) return "";
+  const rows = Object.entries(signals)
+    .map(([key, value]) => `<div><span>${escapeHtml(key.replace(/_/g, " "))}</span><strong>${escapeHtml(value)}</strong></div>`)
+    .join("");
+  return `<div class="signal-grid">${rows}</div>`;
+}
+
 async function openPickSheet(pickNo) {
   const dialog = $("#pick-sheet");
   if (!dialog || !state.leagueId) return;
+  state.pickSheetPickNo = pickNo;
   $("#pick-sheet-title").textContent = `Pick ${pickNo} · ${state.currentPickTeam?.manager_name || "On the clock"}`;
-  state.pickSheetPosition = "";
+  if (!state.pickSheetPosition) state.pickSheetPosition = "ALL";
   await renderPickSheetList(pickNo);
   dialog.showModal();
 }
@@ -46,20 +116,24 @@ async function renderPickSheetList(pickNo) {
   const filters = $("#pick-sheet-filters");
   if (!list) return;
   list.innerHTML = emptyState("Loading...");
-  const query = new URLSearchParams({ league_id: state.leagueId, pick_no: String(pickNo), limit: "12" });
-  if (state.pickSheetPosition) query.set("position", state.pickSheetPosition);
+  const query = new URLSearchParams({
+    league_id: state.leagueId,
+    pick_no: String(pickNo),
+    limit: "30",
+  });
+  if (state.pickSheetPosition && state.pickSheetPosition !== "ALL") {
+    query.set("position", state.pickSheetPosition);
+  }
   const payload = await api(`/api/draft/recommendations?${query}`);
   const recs = payload.recommendations || [];
   if (filters) {
-    filters.innerHTML = ["", "QB", "RB", "WR", "TE"]
-      .map(
-        (pos) =>
-          `<button type="button" class="ghost-button small-button" data-pick-filter="${pos}">${pos || "All"}</button>`,
-      )
-      .join("");
+    filters.innerHTML = PICK_SHEET_POSITIONS.map((pos) => {
+      const active = state.pickSheetPosition === pos ? " active" : "";
+      return `<button type="button" class="ghost-button small-button pick-filter${active}" data-pick-filter="${pos}">${pos}</button>`;
+    }).join("");
   }
   if (!recs.length) {
-    list.innerHTML = emptyState("No players available for this pick.");
+    list.innerHTML = emptyState("No players available for this filter.");
     return;
   }
   list.innerHTML = recs
@@ -67,13 +141,31 @@ async function renderPickSheetList(pickNo) {
       const player = item.player;
       const id = player.internal_player_id || player.id;
       const starred = state.favoriteIds.has(id);
-      return `<article class="pick-sheet-row"><div><strong>${escapeHtml(player.full_name)}</strong>
-        <span class="tag position">${escapeHtml(player.position)} · ${escapeHtml(player.team || "")}</span>
-        <p>Score ${escapeHtml(item.score)} · ${escapeHtml(item.fit)}</p></div>
+      const reasons = (item.reasons || []).slice(0, 3);
+      const topReason = reasons[0] || "Ranking based on consensus and roster fit.";
+      return `<article class="pick-sheet-row">
+        <div class="pick-sheet-main">
+          <div class="pick-sheet-title-row">
+            <strong>${escapeHtml(player.full_name)}</strong>
+            <span class="tag position">${escapeHtml(player.position)} · ${escapeHtml(player.team || "")}</span>
+          </div>
+          <p class="pick-sheet-meta">Score ${escapeHtml(item.score)} · ${escapeHtml(item.fit)} · ${escapeHtml(topReason)}</p>
+          <p class="pick-sheet-meta">2025: ${escapeHtml(historyLine(item.history, 2025))}</p>
+          <p class="pick-sheet-meta">2024: ${escapeHtml(historyLine(item.history, 2024))}</p>
+          <p class="pick-sheet-meta">2026 Props: ${escapeHtml(propsLine(item.props_2026))}</p>
+          <p class="pick-sheet-meta">Outlook: ${escapeHtml(item.outlook || "No outlook generated yet.")}</p>
+          ${item.market_signal ? `<p class="pick-sheet-meta">${escapeHtml(item.market_signal)}</p>` : ""}
+          <details class="pick-sheet-why">
+            <summary>Why this rank?</summary>
+            <ul>${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+            ${signalsHtml(item.signals)}
+          </details>
+        </div>
         <div class="pick-sheet-actions">
-        <button type="button" class="primary-button small-button" data-pick-sheet-draft="${escapeHtml(id)}">Draft</button>
-        <button type="button" class="ghost-button small-button" data-toggle-favorite="${escapeHtml(id)}">${starred ? "★" : "☆"}</button>
-        </div></article>`;
+          <button type="button" class="primary-button small-button" data-pick-sheet-draft="${escapeHtml(id)}">Draft</button>
+          <button type="button" class="ghost-button small-button" data-toggle-favorite="${escapeHtml(id)}">${starred ? "★" : "☆"}</button>
+        </div>
+      </article>`;
     })
     .join("");
 }
@@ -86,7 +178,15 @@ const _loadAll = loadAll;
 loadAll = async function loadAllWithMock() {
   await _loadAll();
   await refreshDataSources();
-  if (state.leagueId) await Promise.all([refreshFavorites(), refreshPreferences()]);
+  if (state.leagueId) {
+    await Promise.all([refreshFavorites(), refreshPreferences(), refreshManagerNamesTable()]);
+  }
+};
+
+const _refreshLeagueManagers = refreshLeagueManagers;
+refreshLeagueManagers = async function refreshLeagueManagersWithNames() {
+  await _refreshLeagueManagers();
+  await refreshManagerNamesTable();
 };
 
 document.addEventListener("click", async (event) => {
@@ -112,6 +212,37 @@ document.addEventListener("click", async (event) => {
     await api("/api/integrations/odds/import", { method: "POST", body: "{}" });
     await refreshDataSources();
     toast("NFL odds imported.");
+    return;
+  }
+  if (target.dataset.saveManager) {
+    const leagueId = requireLeagueId();
+    if (!leagueId) return;
+    const row = target.closest("tr");
+    await api("/api/league/managers/update", {
+      method: "POST",
+      body: JSON.stringify({
+        league_id: leagueId,
+        roster_id: Number(target.dataset.saveManager),
+        local_display_name: row.querySelector(".manager-local-display")?.value || null,
+        local_team_name: row.querySelector(".manager-local-team")?.value || null,
+      }),
+    });
+    await Promise.all([refreshLeagueManagers(), refreshDraftState()]);
+    toast("Manager names saved.");
+    return;
+  }
+  if (target.dataset.resetManager) {
+    const leagueId = requireLeagueId();
+    if (!leagueId) return;
+    await api("/api/league/managers/reset", {
+      method: "POST",
+      body: JSON.stringify({
+        league_id: leagueId,
+        roster_id: Number(target.dataset.resetManager),
+      }),
+    });
+    await Promise.all([refreshLeagueManagers(), refreshDraftState()]);
+    toast("Manager names reset.");
     return;
   }
   if (target.id === "calc-user-tendencies") {
@@ -143,6 +274,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           league_id: leagueId,
           player_id: target.dataset.pickSheetDraft,
+          pick_no: state.pickSheetPickNo || state.currentPick,
           practice_draft_id: state.practiceStatus?.practice?.id || null,
         }),
       }),
@@ -167,12 +299,12 @@ document.addEventListener("click", async (event) => {
       });
     }
     await refreshFavorites();
-    if ($("#pick-sheet")?.open) await renderPickSheetList(state.currentPick);
+    if ($("#pick-sheet")?.open) await renderPickSheetList(state.pickSheetPickNo || state.currentPick);
     return;
   }
   if (target.dataset.pickFilter !== undefined) {
     state.pickSheetPosition = target.dataset.pickFilter;
-    await renderPickSheetList(state.currentPick);
+    await renderPickSheetList(state.pickSheetPickNo || state.currentPick);
     return;
   }
   if (target.id === "pick-sheet-close") {

@@ -4,7 +4,7 @@ import unittest
 from backend.app import db
 from backend.app.models import LeagueSettings
 from backend.app.services.draft_board import get_draft_board, snake_pick_no
-from backend.app.services.keepers import add_keeper, keeper_pick_no, remove_keeper
+from backend.app.services.keepers import add_keeper, keeper_pick_no, list_keepers, remove_keeper
 from backend.app.services.recommendations import database_draft_recommendations
 from backend.app.services.sleeper_import import import_sleeper_players
 
@@ -92,7 +92,7 @@ class KeeperPickTests(unittest.TestCase):
         recs = database_draft_recommendations(
             conn,
             LeagueSettings(),
-            db.get_keepers(conn, league_id),
+            list_keepers(conn, league_id),
             [],
             limit=20,
             league_id=league_id,

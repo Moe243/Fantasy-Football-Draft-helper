@@ -809,8 +809,18 @@ async function refreshLeagueManagers() {
     state.managers = [];
   }
   renderMyTeamSelect();
-  renderKeeperManagerSelect();
   renderDraftOrderMapping();
+  const keeperSelect = $("#keeper-manager");
+  if (keeperSelect) {
+    keeperSelect.innerHTML = state.managers.length
+      ? state.managers
+          .map(
+            (row) =>
+              `<option value="${escapeHtml(row.roster_id)}">${escapeHtml(row.manager_name || row.team_name || row.display_name)}</option>`,
+          )
+          .join("")
+      : '<option value="">Import league first</option>';
+  }
 }
 
 async function refreshDraftBoard() {

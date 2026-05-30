@@ -293,17 +293,6 @@ def init_db(conn: sqlite3.Connection) -> None:
             imported_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE TABLE IF NOT EXISTS player_news (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            internal_player_id TEXT NOT NULL,
-            source_name TEXT NOT NULL,
-            title TEXT,
-            summary TEXT,
-            url TEXT,
-            published_at TEXT,
-            raw_json TEXT,
-            imported_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
 
         CREATE TABLE IF NOT EXISTS user_favorite_players (
             league_id TEXT NOT NULL,
@@ -323,15 +312,25 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS user_draft_tendencies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
             league_id TEXT NOT NULL,
-            round INTEGER,
             position TEXT,
-            pick_count INTEGER,
+            round INTEGER,
             reach_rate REAL,
             value_pick_rate REAL,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(league_id, round, position)
+            sample_size INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS player_news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            internal_player_id TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            title TEXT,
+            summary TEXT,
+            url TEXT,
+            published_at TEXT,
+            raw_json TEXT,
+            imported_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         """
     )
@@ -365,15 +364,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         {
             "league_id": "TEXT",
             "roster_id": "INTEGER",
-            "sleeper_user_id": "TEXT",
         },
     )
-    conn.execute(
-        '''
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_keepers_league_roster
-        ON keepers(league_id, roster_id)
-        WHERE league_id IS NOT NULL AND roster_id IS NOT NULL
-        '''
+    ensure_columns(
+        conn,
+        "league_managers",
+        {
+            "local_display_name": "TEXT",
+            "local_team_name": "TEXT",
+        },
     )
     default_settings = LeagueSettings()
     conn.execute(
@@ -857,44 +856,27 @@ def keeper_from_row(row: sqlite3.Row) -> Keeper:
         round=row["round"],
         pick_no=row["pick_no"],
         league_id=row["league_id"] if "league_id" in keys else None,
-        roster_id=row["roster_id"] if "roster_id" in keys else None,
-        sleeper_user_id=row["sleeper_user_id"] if "sleeper_user_id" in keys else None,
+        roster_id=int(row["roster_id"]) if "roster_id" in keys and row["roster_id"] is not None else None,
     )
 
 
-def get_keepers(conn: sqlite3.Connection, league_id: str | None = None) -> list[Keeper]:
-    if league_id:
-        rows = conn.execute(
-            """
-            SELECT * FROM keepers
-            WHERE league_id = ? OR league_id IS NULL
-            ORDER BY COALESCE(pick_no, 9999), team_name
-            """,
-            (league_id,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM keepers ORDER BY COALESCE(pick_no, 9999), team_name"
-        ).fetchall()
+def get_keepers(conn: sqlite3.Connection) -> list[Keeper]:
+    rows = conn.execute(
+        "SELECT * FROM keepers ORDER BY COALESCE(pick_no, 9999), team_name"
+    ).fetchall()
     return [keeper_from_row(row) for row in rows]
 
 
 def upsert_keeper(conn: sqlite3.Connection, keeper: Keeper) -> None:
-    if keeper.league_id and keeper.roster_id is not None:
-        conn.execute(
-            "DELETE FROM keepers WHERE league_id = ? AND roster_id = ?",
-            (keeper.league_id, keeper.roster_id),
-        )
     conn.execute(
         """
-        INSERT INTO keepers (player_id, team_name, round, pick_no, league_id, roster_id, sleeper_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO keepers (player_id, team_name, round, pick_no, league_id, roster_id)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(player_id, team_name) DO UPDATE SET
             round = excluded.round,
             pick_no = excluded.pick_no,
             league_id = excluded.league_id,
-            roster_id = excluded.roster_id,
-            sleeper_user_id = excluded.sleeper_user_id
+            roster_id = excluded.roster_id
         """,
         (
             keeper.player_id,
@@ -903,24 +885,24 @@ def upsert_keeper(conn: sqlite3.Connection, keeper: Keeper) -> None:
             keeper.pick_no,
             keeper.league_id,
             keeper.roster_id,
-            keeper.sleeper_user_id,
         ),
     )
     conn.commit()
 
 
-def delete_keeper(conn: sqlite3.Connection, player_id: str, team_name: str) -> None:
-    conn.execute(
-        "DELETE FROM keepers WHERE player_id = ? AND team_name = ?",
-        (player_id, team_name),
-    )
-    conn.commit()
 
 
 def delete_keeper_by_roster(conn: sqlite3.Connection, league_id: str, roster_id: int) -> None:
     conn.execute(
         "DELETE FROM keepers WHERE league_id = ? AND roster_id = ?",
         (league_id, roster_id),
+    )
+    conn.commit()
+
+def delete_keeper(conn: sqlite3.Connection, player_id: str, team_name: str) -> None:
+    conn.execute(
+        "DELETE FROM keepers WHERE player_id = ? AND team_name = ?",
+        (player_id, team_name),
     )
     conn.commit()
 

@@ -20,7 +20,8 @@ def start_practice(conn: sqlite3.Connection, league_id: str, name: str | None = 
         (league_id, name or "Practice Draft"),
     )
     conn.commit()
-    return get_current_practice(conn, league_id)
+    from .draft_room import get_draft_state
+    return get_draft_state(conn, league_id)
 
 
 def get_current_practice(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:

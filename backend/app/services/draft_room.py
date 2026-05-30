@@ -30,7 +30,7 @@ def get_draft_state(
     last_pick: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = db.get_league_settings(conn)
-    keepers = db.get_keepers(conn, league_id)
+    keepers = db.get_keepers(conn)
     practice = active_practice(conn, league_id)
     if practice:
         recalculate_current_pick(conn, league_id, int(practice["id"]))
@@ -318,6 +318,46 @@ def manager_for_roster(conn: sqlite3.Connection, league_id: str, roster_id: Any)
         (league_id, roster_id),
     ).fetchone()
     return dict(row) if row else None
+
+
+def league_draft_recommendations(
+    conn: sqlite3.Connection,
+    league_id: str,
+    pick_no: int | None = None,
+    limit: int = 30,
+    position: str | None = None,
+) -> dict[str, Any]:
+    settings = db.get_league_settings(conn)
+    keepers = db.get_keepers(conn)
+    board_data = get_draft_board(conn, league_id)
+    practice = active_practice(conn, league_id)
+    if practice:
+        picks_rows = conn.execute(
+            "SELECT * FROM practice_draft_picks WHERE practice_draft_id = ? ORDER BY pick_no",
+            (practice["id"],),
+        ).fetchall()
+        overlay_practice_picks(conn, board_data, [dict(row) for row in picks_rows])
+    current = int(pick_no or (practice["current_pick"] if practice else first_open_pick(board_data)))
+    board_picks = board_to_draft_picks(board_data)
+    recs = database_draft_recommendations(
+        conn,
+        settings,
+        keepers,
+        board_picks,
+        limit=limit,
+        position=position,
+        current_pick_override=current,
+        league_id=league_id,
+        hide_drafted=True,
+        hide_keepers=True,
+    )
+    cell = find_pick_cell(board_data, current)
+    return {
+        "current_pick": current,
+        "is_my_pick": bool(cell and cell.get("is_mine")),
+        "draft_mode": "mock" if practice else "live",
+        "recommendations": recs,
+    }
 
 
 def pick_summary(conn: sqlite3.Connection, league_id: str, pick_no: int, player_id: str, source: str) -> dict[str, Any]:

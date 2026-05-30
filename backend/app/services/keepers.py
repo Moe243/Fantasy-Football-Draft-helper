@@ -123,8 +123,7 @@ def add_keeper(
         round=keeper_round,
         pick_no=target_pick,
         league_id=league_id,
-        roster_id=resolved_roster,
-        sleeper_user_id=manager["sleeper_user_id"],
+        roster_id=resolved_roster
     )
     db.upsert_keeper(conn, keeper)
     save_keeper_board_pick(conn, league_id, keeper_round, draft_slot, target_pick, resolved_roster, player, manager)
