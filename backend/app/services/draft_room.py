@@ -64,8 +64,6 @@ def get_draft_state(
         likely_available = next_my_pick.get("likely_available") or []
 
     return {
-        "league_id": league_id,
-        "draft_mode": "mock" if practice else "live",
         "league": board_data.get("league"),
         "active_draft_id": board_data.get("active_draft_id"),
         "managers": board_data.get("managers") or [],
@@ -224,6 +222,13 @@ def find_pick_cell(board_data: dict[str, Any], pick_no: int) -> dict[str, Any] |
     return None
 
 
+def player_id_on_cell(cell: dict[str, Any] | None) -> str | None:
+    if not cell:
+        return None
+    player = cell.get("player") or {}
+    return player.get("internal_player_id") or player.get("id")
+
+
 def mark_current_pick(board_data: dict[str, Any], current_pick: int) -> dict[str, Any] | None:
     current_cell = None
     for row in board_data.get("board") or []:
@@ -318,46 +323,6 @@ def manager_for_roster(conn: sqlite3.Connection, league_id: str, roster_id: Any)
         (league_id, roster_id),
     ).fetchone()
     return dict(row) if row else None
-
-
-def league_draft_recommendations(
-    conn: sqlite3.Connection,
-    league_id: str,
-    pick_no: int | None = None,
-    limit: int = 30,
-    position: str | None = None,
-) -> dict[str, Any]:
-    settings = db.get_league_settings(conn)
-    keepers = db.get_keepers(conn)
-    board_data = get_draft_board(conn, league_id)
-    practice = active_practice(conn, league_id)
-    if practice:
-        picks_rows = conn.execute(
-            "SELECT * FROM practice_draft_picks WHERE practice_draft_id = ? ORDER BY pick_no",
-            (practice["id"],),
-        ).fetchall()
-        overlay_practice_picks(conn, board_data, [dict(row) for row in picks_rows])
-    current = int(pick_no or (practice["current_pick"] if practice else first_open_pick(board_data)))
-    board_picks = board_to_draft_picks(board_data)
-    recs = database_draft_recommendations(
-        conn,
-        settings,
-        keepers,
-        board_picks,
-        limit=limit,
-        position=position,
-        current_pick_override=current,
-        league_id=league_id,
-        hide_drafted=True,
-        hide_keepers=True,
-    )
-    cell = find_pick_cell(board_data, current)
-    return {
-        "current_pick": current,
-        "is_my_pick": bool(cell and cell.get("is_mine")),
-        "draft_mode": "mock" if practice else "live",
-        "recommendations": recs,
-    }
 
 
 def pick_summary(conn: sqlite3.Connection, league_id: str, pick_no: int, player_id: str, source: str) -> dict[str, Any]:

@@ -20,8 +20,7 @@ def start_practice(conn: sqlite3.Connection, league_id: str, name: str | None = 
         (league_id, name or "Practice Draft"),
     )
     conn.commit()
-    from .draft_room import get_draft_state
-    return get_draft_state(conn, league_id)
+    return get_current_practice(conn, league_id)
 
 
 def get_current_practice(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
@@ -63,9 +62,15 @@ def make_pick_at(
     draft = active_practice_by_id(conn, league_id, practice_draft_id) if practice_draft_id else require_active(conn, league_id)
     if draft is None:
         raise ValueError("Could not find practice draft")
-    if player_id in practice_drafted_player_ids(conn, int(draft["id"])):
-        raise ValueError("That player has already been selected in this practice draft")
     target_pick = int(pick_no or draft["current_pick"] or 1)
+    existing_row = conn.execute(
+        "SELECT player_id FROM practice_draft_picks WHERE practice_draft_id = ? AND pick_no = ?",
+        (draft["id"], target_pick),
+    ).fetchone()
+    existing_id = existing_row["player_id"] if existing_row else None
+    unavailable = practice_drafted_player_ids(conn, int(draft["id"]))
+    if player_id in unavailable and player_id != existing_id:
+        raise ValueError("That player has already been selected in this practice draft")
     pick_context = pick_context_for(conn, league_id, target_pick)
     insert_practice_pick(conn, draft["id"], pick_context, player_id, source)
     recalculate_current_pick(conn, league_id, int(draft["id"]))
@@ -75,8 +80,6 @@ def make_pick_at(
 def simulate_next(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     draft = require_active(conn, league_id)
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
-    if pick_context.get("is_mine"):
-        raise ValueError("Cannot simulate while you are on the clock. Make your pick first.")
     player_id = choose_auto_pick(conn, league_id, int(draft["id"]))
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "simulated")
     recalculate_current_pick(conn, league_id, int(draft["id"]))
