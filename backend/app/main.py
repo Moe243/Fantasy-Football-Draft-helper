@@ -15,6 +15,7 @@ from .config import settings
 from .models import DraftPick, Keeper
 from .providers.http import ProviderError
 from .providers.odds import OddsClient
+from .providers.fantasypros import FantasyProsFetchError, fetch_fantasypros_rankings
 from .providers.rankings_csv import import_ranking_rows
 from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
@@ -353,6 +354,26 @@ class FantasyHandler(BaseHTTPRequestHandler):
             lookback = int(first(query, "lookback_hours") or "24")
             return enriched_sleeper_trending(conn, trend_type=trend_type, limit=limit, lookback_hours=lookback)
 
+        if method == "POST" and path == "/api/integrations/fantasypros/fetch":
+            payload = self.read_json()
+            position = str(payload.get("position") or "overall").strip().lower()
+            try:
+                rows = fetch_fantasypros_rankings(position)
+                imported = import_ranking_rows(conn, "fantasypros", rows)
+                return {
+                    "ok": True,
+                    "position": position,
+                    "message": f"Imported {imported['imported_count']} FantasyPros rankings.",
+                    "imported_count": imported["imported_count"],
+                    "matched": imported["matched_players"],
+                    "created": imported["created_players"],
+                    "failed": imported["skipped_count"],
+                }
+            except (FantasyProsFetchError, ProviderError, ValueError, json.JSONDecodeError):
+                return fantasypros_fetch_failure(position)
+            except Exception:
+                return fantasypros_fetch_failure(position)
+
         if method == "POST" and path == "/api/rankings/import/csv":
             payload = self.read_json()
             rows = payload.get("rows")
@@ -607,6 +628,18 @@ def require(payload: dict[str, Any], name: str) -> str:
         raise ValueError(f"{name} is required")
     return str(value)
 
+
+
+def fantasypros_fetch_failure(position: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "position": position,
+        "message": "FantasyPros fetch failed. Use manual JSON import instead.",
+        "imported_count": 0,
+        "matched": 0,
+        "created": 0,
+        "failed": 0,
+    }
 
 def require_query(query: dict[str, list[str]], name: str) -> str:
     value = first(query, name)

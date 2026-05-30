@@ -434,6 +434,27 @@ main {
   margin-top: 12px;
 }
 
+.is-hidden {
+  display: none;
+}
+
+#fp-manual-label.fp-manual-visible textarea {
+  display: block;
+}
+
+.helper-details {
+  margin: 8px 0;
+}
+
+.helper-pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow-x: auto;
+  font-size: 0.82rem;
+}
+
 .draft-order-panel {
   margin-top: 14px;
   padding-top: 12px;
@@ -718,27 +739,6 @@ textarea {
 .full-width-button {
   width: 100%;
   margin-top: 12px;
-}
-
-.format-helper {
-  margin: 8px 0 12px;
-}
-
-.format-helper summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.format-example {
-  margin: 8px 0 0;
-  padding: 10px;
-  border-radius: 8px;
-  background: #f7f3eb;
-  border: 1px solid var(--line);
-  font-size: 0.8rem;
-  overflow-x: auto;
-  white-space: pre-wrap;
 }
 
 .consensus-grid {

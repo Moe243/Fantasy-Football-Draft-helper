@@ -33,6 +33,10 @@ class Settings:
     nfl_stats_cache_path: Path = Path(
         os.getenv("NFL_STATS_CACHE_PATH", str(ROOT_DIR / ".data" / "nfl_stats_cache.json"))
     )
+    nflverse_stats_url: str = os.getenv(
+        "NFLVERSE_STATS_URL",
+        "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_season.json",
+    )
 
 
 settings = Settings()
