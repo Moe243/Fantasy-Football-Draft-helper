@@ -22,6 +22,10 @@ const state = {
   playersSearch: { players: [], total: 0, limit: 50, offset: 0 },
   selectedPlayer: null,
   practiceStatus: null,
+  draftMode: "live",
+  mockDraft: null,
+  favoriteIds: new Set(),
+  pickSheetPosition: "",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -246,29 +250,62 @@ function waiverCard(item) {
 function renderDraftBoard(boardData = state.draftBoard, selector = "#league-draft-board") {
   const container = $(selector);
   if (!container) return;
-  container.innerHTML = draftBoardHtml(boardData);
+  const allowPick = state.draftMode === "mock" && state.mockDraft && !state.mockDraft.is_complete;
+  container.innerHTML = draftBoardHtml(boardData, { allowPick });
+}
+
+function renderMockDraftBoard() {
+  if (!state.draftBoard) return;
+  renderDraftBoard(state.draftBoard, "#mock-draft-board");
 }
 
 function renderDraftRoomStatus() {
-  const container = $("#draft-room-status");
-  if (!container) return;
-  if (!state.leagueId) {
-    container.innerHTML = `<span class="metric-chip">No league</span>`;
-    return;
-  }
   const team = state.currentPickTeam;
   const teamName = team?.manager_name || "Unknown team";
   const label = state.isMyPick ? "Your pick" : "On the clock";
-  container.innerHTML = `
-    <div class="current-pick-banner${state.isMyPick ? " mine" : ""}">
-      <span>${escapeHtml(label)}</span>
-      <strong>Pick ${escapeHtml(state.currentPick || 1)}</strong>
-      <small>${escapeHtml(teamName)}</small>
-    </div>
-  `;
+  const mockNote = state.draftMode === "mock"
+    ? `<p class="mock-inline-note">Mock draft active — click the highlighted cell to draft.</p>`
+    : "";
+  const html = !state.leagueId
+    ? `<span class="metric-chip">No league</span>`
+    : `${mockNote}<div class="current-pick-banner${state.isMyPick ? " mine" : ""}"><span>${escapeHtml(label)}</span><strong>Pick ${escapeHtml(state.currentPick || 1)}</strong><small>${escapeHtml(teamName)}</small></div>`;
+  const container = $("#draft-room-status");
+  if (container) container.innerHTML = html;
+  const mockStatus = $("#mock-draft-room-status");
+  if (mockStatus) mockStatus.innerHTML = html;
 }
 
-function draftBoardHtml(boardData) {
+function renderMockBanner() {
+  const banner = $("#mock-mode-banner");
+  if (!banner) return;
+  if (state.draftMode !== "mock" || !state.mockDraft) {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return;
+  }
+  banner.classList.remove("hidden");
+  const md = state.mockDraft;
+  banner.textContent = md.is_complete
+    ? `Mock draft complete (${md.picks_made} picks). Reset to run again.`
+    : `Mock draft active · Pick ${md.current_pick} of ${md.max_pick}`;
+}
+
+function updateMockControls() {
+  const complete = state.mockDraft?.is_complete;
+  const myPick = state.mockDraft?.is_my_pick;
+  const simNext = $("#practice-sim-next");
+  const simMine = $("#practice-sim-mine");
+  if (simNext) simNext.disabled = Boolean(complete || myPick);
+  if (simMine) simMine.disabled = Boolean(complete);
+}
+
+function updateSuggestedPicksPanel() {
+  const details = $("#suggested-picks-details");
+  if (details && state.draftMode === "mock") details.open = false;
+}
+
+function draftBoardHtml(boardData, options = {}) {
+  const allowPick = Boolean(options.allowPick);
   if (!state.leagueId) {
     return emptyState("Enter a Sleeper league ID in Setup to build your league draft board.");
   }
@@ -289,15 +326,17 @@ function draftBoardHtml(boardData) {
   const rows = boardData.board.map((round) => `
     <div class="draft-board-row">
       <div class="draft-board-cell round-label">Round ${round.round}</div>
-      ${(round.picks || []).map((pick) => draftCell(pick)).join("")}
+      ${(round.picks || []).map((pick) => draftCell(pick, { allowPick })).join("")}
     </div>
   `).join("");
   return `<div class="draft-board-table" style="--team-count: ${teamCount}">${headerRow}${rows}</div>`;
 }
 
-function draftCell(pick) {
+function draftCell(pick, options = {}) {
   const player = pick.player;
   const classes = ["draft-board-cell"];
+  const canPick = options.allowPick && pick.is_current_pick && !player && !pick.is_keeper;
+  if (canPick) classes.push("pickable");
   if (pick.is_mine) classes.push("mine");
   if (pick.is_current_pick) classes.push("current");
   if (pick.is_my_current_pick) classes.push("my-current");
@@ -310,8 +349,9 @@ function draftCell(pick) {
   const traded = pick.is_traded ? `<span class="tag traded-tag">Traded</span>` : "";
   const current = pick.is_current_pick ? `<span class="tag current-tag">${pick.is_mine ? "My pick" : "Current"}</span>` : "";
   const remove = player && !pick.is_keeper ? `<button class="text-button remove-pick-button" data-remove-board-pick="${escapeHtml(pick.pick_no)}">Remove</button>` : "";
+  const pickAttrs = canPick ? ` data-pick-cell="${escapeHtml(pick.pick_no)}" role="button" tabindex="0"` : "";
   return `
-    <div class="${classes.join(" ")}">
+    <div class="${classes.join(" ")}"${pickAttrs}>
       <span class="pick-meta">Pick ${escapeHtml(pick.pick_no)} · Slot ${escapeHtml(pick.draft_slot)}</span>
       ${playerLabel}
       <div class="pick-tags">${current}${keeper}${traded}${practice}${remove}</div>
@@ -734,8 +774,14 @@ function applyDraftState(payload) {
   renderRosterNeeds();
   renderRecommendations();
   renderPicks();
+  state.draftMode = payload.draft_mode || "live";
+  state.mockDraft = payload.mock_draft || null;
   renderDraftOrderMapping();
   renderPracticeStatus();
+  renderMockDraftBoard();
+  renderMockBanner();
+  updateMockControls();
+  updateSuggestedPicksPanel();
 }
 
 async function refreshWaivers() {

@@ -25,3 +25,29 @@ class OddsClient:
                 "oddsFormat": "american",
             },
         )
+
+    def fetch_nfl_events(self) -> list[dict[str, Any]]:
+        if not self.api_key:
+            raise ProviderError("ODDS_API_KEY is not configured.")
+        return get_json(
+            f"{self.base_url}/sports/americanfootball_nfl/events",
+            {"apiKey": self.api_key},
+        )
+
+    def fetch_event_odds(
+        self,
+        event_id: str,
+        regions: str = "us",
+        markets: str = "player_pass_yds,player_rush_yds,player_reception_yds,player_anytime_td",
+    ) -> dict[str, Any]:
+        if not self.api_key:
+            raise ProviderError("ODDS_API_KEY is not configured.")
+        return get_json(
+            f"{self.base_url}/sports/americanfootball_nfl/events/{event_id}/odds",
+            {
+                "apiKey": self.api_key,
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": "american",
+            },
+        )

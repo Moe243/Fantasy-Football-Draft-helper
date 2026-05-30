@@ -107,7 +107,10 @@ python3 -m unittest discover backend/tests
 - `GET /api/players/consensus?position=RB&limit=100&current_pick=25`: compares available source rankings.
 - `GET /api/draft/board?league_id=...`: returns the Sleeper league draft grid, managers, my team, my picks, and likely available players.
 - `GET /api/draft/availability?league_id=...&pick_no=25`: estimates which players may last to a future pick.
-- `POST /api/practice/start`, `POST /api/practice/simulate-next`, `POST /api/practice/simulate-to-my-next-pick`, `POST /api/practice/pick`, `DELETE /api/practice/reset`: manage a saved practice draft.
+- `POST /api/practice/start`, `POST /api/practice/simulate-next`, `POST /api/practice/simulate-to-my-next-pick`, `POST /api/practice/pick`, `DELETE /api/practice/reset`: manage a saved mock/practice draft.
+- `GET /api/setup/data-sources`: configured keys and latest import status.
+- `POST /api/integrations/sleeper/projections/import`, `POST /api/integrations/odds/import`: refresh projection and odds data.
+- `GET/POST/DELETE /api/user/favorites`, `POST /api/user/draft-preferences`: favorites and personal ranking bias.
 - `GET /api/integrations/sleeper/trending/enriched`: enriches Sleeper trending adds with local player and consensus data.
 
 ## Next Build Steps

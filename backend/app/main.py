@@ -106,6 +106,9 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 "league": league_status(conn, league_id) if league_id else None,
             }
 
+        if method == "GET" and path == "/api/setup/data-sources":
+            return data_sources_status(conn)
+
         if method == "GET" and path == "/api/architecture":
             return {
                 "stack": {

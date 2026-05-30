@@ -17,6 +17,7 @@ from .practice_draft import (
     make_pick_at,
     overlay_practice_picks,
     recalculate_current_pick,
+    mock_draft_metadata,
     remove_practice_pick,
 )
 from .recommendations import database_draft_recommendations, desired_position_counts
@@ -56,7 +57,10 @@ def get_draft_state(
         hide_drafted=True,
         hide_keepers=True,
         current_pick_override=current_pick,
+        league_id=league_id,
     )
+    draft_mode = 'mock' if practice else 'live'
+    mock_draft = mock_draft_metadata(conn, league_id, practice) if practice else None
     my_picks = enrich_my_picks(conn, league_id, board_data.get("my_picks") or [], current_pick)
     likely_available = []
     next_my_pick = next((pick for pick in my_picks if int(pick["pick_no"]) >= current_pick), None)
@@ -84,6 +88,8 @@ def get_draft_state(
         "practice": dict(practice) if practice else None,
         "practice_picks": practice_picks,
         "last_pick": last_pick,
+        "draft_mode": draft_mode,
+        "mock_draft": mock_draft,
     }
 
 

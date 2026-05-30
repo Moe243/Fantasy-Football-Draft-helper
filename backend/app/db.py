@@ -251,6 +251,53 @@ def init_db(conn: sqlite3.Connection) -> None:
             UNIQUE(practice_draft_id, pick_no)
         );
 
+        CREATE TABLE IF NOT EXISTS user_favorite_players (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id TEXT NOT NULL,
+            player_id TEXT NOT NULL,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(league_id, player_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_draft_preferences (
+            league_id TEXT PRIMARY KEY,
+            reach_bias REAL DEFAULT 0,
+            value_bias REAL DEFAULT 0,
+            position_weights_json TEXT DEFAULT '{}',
+            stack_preferences_json TEXT DEFAULT '{}',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_draft_tendencies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id TEXT NOT NULL,
+            round INTEGER,
+            position TEXT,
+            pick_count INTEGER,
+            reach_rate REAL,
+            value_pick_rate REAL,
+            avg_round_taken REAL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(league_id, round, position)
+        );
+
+        CREATE TABLE IF NOT EXISTS game_odds_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT,
+            home_team TEXT,
+            away_team TEXT,
+            spread REAL,
+            total REAL,
+            home_moneyline TEXT,
+            away_moneyline TEXT,
+            sportsbook TEXT,
+            season INTEGER,
+            week INTEGER,
+            raw_json TEXT,
+            imported_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS player_stat_lines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             internal_player_id TEXT NOT NULL,
