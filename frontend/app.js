@@ -21,6 +21,8 @@ const state = {
   rosterNeeds: [],
   playersSearch: { players: [], total: 0, limit: 50, offset: 0 },
   selectedPlayer: null,
+  selectedPlayerRankings: null,
+  draftBoardRankingsById: {},
   practiceStatus: null,
 };
 
@@ -96,6 +98,101 @@ function renderPlayerOptions() {
     .map((player) => `<option value="${escapeHtml(player.name || player.full_name)}">${escapeHtml(`${player.position || "UNK"} · ${player.team || ""}`)}</option>`)
     .join("");
 }
+
+
+function valueLabelClass(label) {
+  if (label === "Strong Value") return "value-label-strong";
+  if (label === "Fair Value") return "value-label-fair";
+  if (label === "Split Opinions") return "value-label-split";
+  return "value-label-none";
+}
+
+function sourceDisplayName(sourceName) {
+  const names = { sleeper: "Sleeper", espn: "ESPN", fantasypros: "FantasyPros" };
+  return names[sourceName] || sourceName;
+}
+
+function renderDraftRankingBadge(playerId) {
+  const rankings = state.draftBoardRankingsById[playerId];
+  if (!rankings) return "";
+  const consensus = rankings.consensus || {};
+  const bySource = Object.fromEntries((rankings.sources || []).map((row) => [row.source_name, row]));
+  const sleeper = bySource.sleeper;
+  const rankLine = sleeper?.overall_rank != null || sleeper?.adp != null
+    ? `Overall Rank: ${formatMetric(sleeper.overall_rank)}  |  ADP: ${formatMetric(sleeper.adp)}`
+    : consensus.avg_rank != null
+      ? `Consensus Rank: ${formatMetric(consensus.avg_rank)}`
+      : "";
+  const label = consensus.label || "Not Enough Sources";
+  const count = consensus.source_count ?? 0;
+  return `
+    <div class="draft-ranking-badge">
+      ${rankLine ? `<p class="ranking-summary">${escapeHtml(rankLine)}</p>` : ""}
+      <span class="value-label ${valueLabelClass(label)}">${escapeHtml(label)} — ${escapeHtml(String(count))} source${count === 1 ? "" : "s"}</span>
+    </div>
+  `;
+}
+
+function renderSourceComparisonSection(rankings) {
+  if (!rankings) {
+    return `<section class="detail-section source-comparison-section">${emptyState("No rankings loaded.")}</section>`;
+  }
+  if (rankings.message && !(rankings.sources || []).length) {
+    return `
+      <section class="detail-section source-comparison-section">
+        <h4>Source Comparison</h4>
+        ${emptyState(rankings.message)}
+      </section>
+    `;
+  }
+  const bySource = Object.fromEntries((rankings.sources || []).map((row) => [row.source_name, row]));
+  const rows = ["sleeper", "espn", "fantasypros"].map((key) => {
+    const row = bySource[key];
+    if (!row) {
+      return `<div class="source-compare-row"><span>${escapeHtml(sourceDisplayName(key))}</span><span>—</span></div>`;
+    }
+    return `
+      <div class="source-compare-row">
+        <span>${escapeHtml(sourceDisplayName(key))}</span>
+        <span>Rank: ${escapeHtml(formatMetric(row.overall_rank))}   ADP: ${escapeHtml(formatMetric(row.adp))}</span>
+      </div>
+    `;
+  }).join("");
+  const consensus = rankings.consensus || {};
+  const label = consensus.label || "Not Enough Sources";
+  return `
+    <section class="detail-section source-comparison-section">
+      <h4>Source Comparison</h4>
+      <div class="source-comparison-table">
+        ${rows}
+        <div class="source-compare-divider"></div>
+        <div class="source-compare-row consensus-row">
+          <span>Consensus</span>
+          <span>Rank: ${escapeHtml(formatMetric(consensus.avg_rank))}   Sources: ${escapeHtml(consensus.source_count ?? 0)}</span>
+        </div>
+        <div class="source-compare-label">
+          Label: <span class="value-label ${valueLabelClass(label)}">${escapeHtml(label)}</span>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+async function refreshDraftBoardRankings() {
+  try {
+    const query = new URLSearchParams(draftQueryString());
+    query.set("current_pick", String(state.currentPick || 1));
+    const payload = await api(`/api/draft/board/rankings?${query.toString()}`);
+    const byId = {};
+    for (const row of payload.players || []) {
+      byId[row.player_id] = row;
+    }
+    state.draftBoardRankingsById = byId;
+  } catch (error) {
+    state.draftBoardRankingsById = {};
+  }
+}
+
 
 function renderRecommendations() {
   const container = $("#recommendations");
@@ -427,10 +524,6 @@ function renderPlayerDetail() {
           ${detailRow("Source Count", detail.consensus?.source_count)}
           ${detailRow("Spread", detail.consensus?.rank_spread)}
         </section>
-        <section class="detail-section">
-          <h4>Source Comparison</h4>
-          ${sourceComparisonRows(detail.source_comparison)}
-        </section>
       </div>
       <section class="detail-section">
         <h4>Rankings by Source</h4>
@@ -462,63 +555,6 @@ function renderPlayerDetail() {
 
 function detailRow(label, value) {
   return `<div class="detail-row two-column"><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatMetric(value))}</strong></div>`;
-}
-
-function sourceComparisonRows(comparison) {
-  if (!comparison) return emptyState("Import more sources to compare rankings.");
-  return [
-    detailRow("Sleeper ADP", comparison.sleeper_adp),
-    detailRow("ESPN Rank", comparison.espn_rank),
-    detailRow("FantasyPros Rank", comparison.fantasypros_rank),
-    detailRow("nflverse Fantasy Pts", comparison.nflverse_fantasy_points),
-    detailRow("Projected Points", comparison.projected_points),
-    detailRow("Consensus Rank", comparison.consensus_rank),
-    detailRow("Rank Spread", comparison.rank_spread),
-    detailRow("Sources", comparison.source_count),
-    detailRow("Value Label", comparison.value_label),
-  ].join("");
-}
-
-function renderImportCenterStatus() {
-  const container = $("#import-center-status");
-  if (!container) return;
-  const center = state.setupStatus?.import_center;
-  if (!center?.panels?.length) {
-    container.innerHTML = emptyState("Run Sleeper player import to begin.");
-    return;
-  }
-  container.innerHTML = center.panels
-    .map((panel) => {
-      const run = panel.latest_run;
-      const imported = run?.imported_count ?? panel.ranking_rows ?? panel.stat_rows ?? panel.players_loaded ?? 0;
-      const last = panel.last_import || run?.finished_at || "Never";
-      return `
-        <div class="compact-row">
-          <div>
-            <strong>${escapeHtml(panel.title)}</strong>
-            <span>${escapeHtml(panel.source_name)} · ${escapeHtml(String(imported))} records</span>
-          </div>
-          <small>${escapeHtml(String(last))}</small>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function renderImportResult(containerId, result) {
-  const container = $(containerId);
-  if (!container || !result) return;
-  const failed = (result.failed_rows || [])
-    .slice(0, 3)
-    .map((row) => `${row.reason || "failed"} (row ${row.row_index ?? "?"})`)
-    .join("; ");
-  container.innerHTML = [
-    statusLine("Source", result.source_name || ""),
-    statusLine("Imported", result.imported_count ?? 0),
-    statusLine("Failed", result.failed_count ?? 0),
-    failed ? statusLine("Failed rows", failed) : "",
-    result.last_import?.finished_at ? statusLine("Last import", result.last_import.finished_at) : "",
-  ].join("");
 }
 
 function rankingsTable(rankings) {
@@ -654,7 +690,6 @@ function renderDraftOrderMapping() {
 }
 
 function renderImportStatus() {
-  renderImportCenterStatus();
   const container = $("#import-status");
   if (!container) return;
   const latest = state.setupStatus?.latest_player_import;
@@ -742,6 +777,7 @@ async function refreshDraft() {
   state.keepers = keepers.keepers;
   state.recommendations = draft.recommendations;
   state.currentPick = draft.current_pick;
+  await refreshDraftBoardRankings();
   renderStatus();
   renderRecommendations();
   renderPicks();
@@ -769,10 +805,10 @@ async function refreshDraftState() {
   const query = new URLSearchParams(draftStateQueryParams());
   query.set("league_id", state.leagueId);
   const payload = await api(`/api/draft/state?${query.toString()}`);
-  applyDraftState(payload);
+  await applyDraftState(payload);
 }
 
-function applyDraftState(payload) {
+async function applyDraftState(payload) {
   state.draftState = payload;
   state.draftBoard = payload;
   state.draftMapping = payload.draft_mapping || payload.draft_order || state.draftMapping || [];
@@ -794,6 +830,7 @@ function applyDraftState(payload) {
   renderDraftBoard();
   renderMyUpcomingPicks();
   renderRosterNeeds();
+  await refreshDraftBoardRankings();
   renderRecommendations();
   renderPicks();
   renderDraftOrderMapping();
@@ -883,7 +920,13 @@ async function refreshPracticeStatus() {
 }
 
 async function loadPlayerDetail(playerId) {
-  state.selectedPlayer = await api(`/api/players/detail?player_id=${encodeURIComponent(playerId)}`);
+  const currentPick = state.currentPick || 1;
+  const [detail, rankings] = await Promise.all([
+    api(`/api/players/detail?player_id=${encodeURIComponent(playerId)}`),
+    api(`/api/player/${encodeURIComponent(playerId)}/rankings?current_pick=${encodeURIComponent(currentPick)}`).catch(() => null),
+  ]);
+  state.selectedPlayer = detail;
+  state.selectedPlayerRankings = rankings;
   renderPlayerDetail();
   setActiveTab("players");
 }
@@ -1270,36 +1313,7 @@ $("#sleeper-form").addEventListener("submit", async (event) => {
   toast(`Imported ${result.imported.league?.name || "Sleeper league"}.`);
 });
 
-
-$("#fantasypros-rankings-form")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await importRankings("fantasypros", "#fantasypros-rankings-json", "#fantasypros-import-result");
-});
-$("#espn-rankings-form")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await importRankings("espn", "#espn-rankings-json", "#espn-import-result");
-});
-$("#nflverse-form")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const text = $("#nflverse-json").value.trim();
-  const body = text && text !== "[]" ? { rows: parseRows(text, "nflverse") } : { fetch: true, season: Number($("#nflverse-season").value || 2024) };
-  if (!body.rows && !body.fetch) return;
-  const result = await api("/api/integrations/nflverse/stats/import", { method: "POST", body: JSON.stringify(body) });
-  renderImportResult("#nflverse-import-result", result);
-  await refreshSetupStatus();
-  toast(`Imported ${result.imported_count} nflverse stat rows.`);
-});
-$("#nflverse-fetch")?.addEventListener("click", async () => {
-  const limit = $("#nflverse-limit").value.trim();
-  const body = { fetch: true, season: Number($("#nflverse-season").value || 2024) };
-  if (limit) body.limit = Number(limit);
-  const result = await api("/api/integrations/nflverse/stats/import", { method: "POST", body: JSON.stringify(body) });
-  renderImportResult("#nflverse-import-result", result);
-  await refreshSetupStatus();
-  toast(`Fetched and imported ${result.imported_count} nflverse rows.`);
-});
-
-$("#rankings-form")?.addEventListener("submit", async (event) => {
+$("#rankings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const rows = parseRows($("#rankings-json").value, "Rankings");
   if (!rows) return;
