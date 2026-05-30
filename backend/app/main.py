@@ -20,7 +20,8 @@ from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
 from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
-from .services.data_imports import import_prop_rows, import_stat_rows
+from .providers.nfl_data import NFLStatsProvider
+from .services.data_imports import import_nfl_public_stat_rows, import_prop_rows, import_stat_rows
 from .services.draft_board import get_draft_board
 from .services.draft_history import draft_history_summary
 from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
@@ -353,6 +354,23 @@ class FantasyHandler(BaseHTTPRequestHandler):
             if not isinstance(rows, list):
                 raise ValueError("rows must be a list")
             return import_prop_rows(conn, require(payload, "source_name"), payload.get("sportsbook"), rows)
+
+
+        if method == "POST" and path == "/api/integrations/nfl/stats/import":
+            payload = self.read_json()
+            source_name = str(payload.get("source_name") or "nflfastR")
+            season = payload.get("season")
+            provider = NFLStatsProvider(
+                source_url=payload.get("source_url"),
+                season=season,
+            )
+            rows = provider.fetch_rows()
+            return import_nfl_public_stat_rows(
+                conn,
+                source_name,
+                rows,
+                default_season=optional_int(season) if season is not None else None,
+            )
 
         if method == "POST" and path == "/api/practice/start":
             payload = self.read_json()

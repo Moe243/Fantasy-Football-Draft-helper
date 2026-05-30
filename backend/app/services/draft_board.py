@@ -20,6 +20,7 @@ def get_draft_board(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     picks_by_no = get_picks_by_no(conn, league_id, draft_id)
     ownership_by_no = get_pick_ownership_by_no(conn, league_id, draft_id)
     board: list[dict[str, Any]] = []
+    keeper_round = 15
     for round_no in range(1, rounds + 1):
         row_picks: list[dict[str, Any]] = []
         for draft_slot in range(1, teams + 1):
@@ -27,9 +28,17 @@ def get_draft_board(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
             slot = draft_order[draft_slot - 1] if draft_slot - 1 < len(draft_order) else {}
             existing = picks_by_no.get(pick_no)
             ownership = ownership_by_no.get(pick_no, {})
-            original_roster_id = ownership.get("original_roster_id") or slot.get("roster_id")
-            current_roster_id = ownership.get("current_roster_id") or (existing or {}).get("roster_id") or original_roster_id
-            is_traded = bool(ownership.get("source") == "traded_pick" or (original_roster_id and current_roster_id and original_roster_id != current_roster_id))
+            if round_no == keeper_round:
+                original_roster_id = slot.get("roster_id")
+                current_roster_id = original_roster_id
+                is_traded = False
+            else:
+                original_roster_id = ownership.get("original_roster_id") or slot.get("roster_id")
+                current_roster_id = ownership.get("current_roster_id") or (existing or {}).get("roster_id") or original_roster_id
+                is_traded = bool(
+                    ownership.get("source") == "traded_pick"
+                    or (original_roster_id and current_roster_id and original_roster_id != current_roster_id)
+                )
             row_picks.append(
                 {
                     "pick_no": pick_no,

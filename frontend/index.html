@@ -335,6 +335,23 @@
             </section>
 
             <section class="panel">
+              <h3>NFL Stats Import</h3>
+              <p class="helper-copy">Import weekly actual or projected stats from a public JSON/CSV URL (nflfastR-style columns supported).</p>
+              <div class="stack-form">
+                <label>
+                  Season
+                  <input id="nfl-stats-season" type="number" min="2000" max="2100" placeholder="2025" />
+                </label>
+                <label>
+                  Source URL
+                  <input id="nfl-stats-source-url" type="url" placeholder="https://... or sample_data/nfl_stats_sample.json" />
+                </label>
+                <button type="button" class="primary-button" id="import-nfl-stats">Import NFL Stats</button>
+                <div id="nfl-stats-import-status" class="compact-list setup-status"></div>
+              </div>
+            </section>
+
+            <section class="panel">
               <h3>Stats JSON</h3>
               <form id="stats-form" class="stack-form">
                 <label>Source name <input id="stats-source" value="espn" /></label>

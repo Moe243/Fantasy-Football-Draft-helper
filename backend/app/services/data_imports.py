@@ -10,8 +10,88 @@ from .. import db
 from .normalization import match_player, normalize_name, normalize_position, normalize_team
 
 
+NFL_STAT_SOURCES = frozenset({"nflfastr", "nfl_public_stats"})
+
+
 def import_stat_rows(conn: sqlite3.Connection, source_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    key = source_name.lower().replace("-", "").replace("_", "")
+    if key in {"nflfastr", "nflpublicstats"} or source_name in NFL_STAT_SOURCES:
+        return import_nfl_public_stat_rows(conn, source_name, rows)
     return import_rows(conn, source_name, rows, kind="stats")
+
+
+def import_nfl_public_stat_rows(
+    conn: sqlite3.Connection,
+    source_name: str,
+    rows: list[dict[str, Any]],
+    default_season: int | str | None = None,
+) -> dict[str, Any]:
+    """Import stats for existing Sleeper players only; unmatched rows are reported."""
+    run_id = db.start_import_run(conn, source_name, "stats")
+    imported = 0
+    failed_rows: list[dict[str, Any]] = []
+    season_value: int | None = None
+
+    try:
+        for index, row in enumerate(rows, start=1):
+            player_name = str(row.get("player_name") or "").strip()
+            if not player_name:
+                failed_rows.append(
+                    {
+                        "row": index,
+                        "player_name": "",
+                        "reason": "Missing player_name",
+                    }
+                )
+                continue
+
+            position = normalize_position(str(row.get("position") or ""))
+            team = normalize_team(str(row.get("team") or ""))
+            player = match_player(conn, player_name, position=position, team=team)
+            if not player:
+                failed_rows.append(
+                    {
+                        "row": index,
+                        "player_name": player_name,
+                        "reason": "No matching player found by name/team/position",
+                    }
+                )
+                continue
+
+            stat_type = str(row.get("stat_type") or "actual").lower().strip()
+            if stat_type not in {"actual", "projected"}:
+                stat_type = "actual"
+            row["stat_type"] = stat_type
+
+            row_season = row.get("season") or default_season
+            if row_season not in {None, ""}:
+                season_value = int(row_season)
+                row["season"] = season_value
+
+            try:
+                insert_stat(conn, player["internal_player_id"], source_name, row)
+                imported += 1
+            except Exception as exc:
+                failed_rows.append(
+                    {
+                        "row": index,
+                        "player_name": player_name,
+                        "reason": str(exc),
+                    }
+                )
+
+        db.finish_import_run(conn, run_id, "success", imported)
+        return {
+            "status": "success",
+            "source_name": source_name,
+            "season": season_value,
+            "imported_count": imported,
+            "failed_count": len(failed_rows),
+            "failed_rows": failed_rows,
+        }
+    except Exception as exc:
+        db.finish_import_run(conn, run_id, "error", imported, str(exc))
+        raise
 
 
 def import_prop_rows(conn: sqlite3.Connection, source_name: str, sportsbook: str | None, rows: list[dict[str, Any]]) -> dict[str, Any]:
