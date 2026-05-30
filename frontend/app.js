@@ -1208,79 +1208,165 @@ $("#sleeper-form").addEventListener("submit", async (event) => {
   toast(`Imported ${result.imported.league?.name || "Sleeper league"}.`);
 });
 
-function renderFantasyProsImportStatus(result) {
+function stripCsvQuotes(value) {
+  const text = String(value ?? "").trim();
+  if (text.startsWith('"') && text.endsWith('"')) {
+    return text.slice(1, -1).replace(/""/g, '"');
+  }
+  return text;
+}
+
+function parseCsvLine(line) {
+  const fields = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      fields.push(stripCsvQuotes(current));
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  fields.push(stripCsvQuotes(current));
+  return fields;
+}
+
+function parseFantasyProsCsvText(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (!lines.length) {
+    throw new Error("CSV file is empty");
+  }
+  const headers = parseCsvLine(lines[0]).map((header) => stripCsvQuotes(header));
+  const rows = lines.slice(1).map((line) => parseCsvLine(line));
+  return { headers, rows };
+}
+
+function splitFantasyProsPosition(posValue) {
+  const positionRank = String(posValue || "").trim().toUpperCase();
+  if (!positionRank) {
+    return { position: "", position_rank: "" };
+  }
+  if (positionRank === "DST" || positionRank.startsWith("DST")) {
+    return { position: "DEF", position_rank: positionRank };
+  }
+  const letters = positionRank.match(/^[A-Z]+/);
+  return {
+    position: letters ? letters[0] : positionRank,
+    position_rank: positionRank,
+  };
+}
+
+function parseOptionalInt(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const parsed = Number.parseInt(text, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseOptionalFloat(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const parsed = Number.parseFloat(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function mapFantasyProsCsvRow(headerIndex, values) {
+  const get = (name) => {
+    const index = headerIndex[name];
+    return index === undefined ? "" : values[index];
+  };
+  const playerName = String(get("PLAYER NAME") || "").trim();
+  if (!playerName) {
+    return null;
+  }
+  const { position, position_rank } = splitFantasyProsPosition(get("POS"));
+  return {
+    source_name: "fantasypros",
+    overall_rank: parseOptionalInt(get("RK")),
+    player_name: playerName,
+    team: String(get("TEAM") || "").trim(),
+    position,
+    position_rank,
+    tier: parseOptionalInt(get("TIERS")),
+    bye_week: parseOptionalInt(get("BYE WEEK")),
+    ecr_vs_adp: parseOptionalFloat(get("ECR VS. ADP")),
+  };
+}
+
+function fantasyProsRowsFromCsv(text) {
+  const { headers, rows } = parseFantasyProsCsvText(text);
+  const headerIndex = Object.fromEntries(headers.map((header, index) => [header, index]));
+  const required = ["RK", "TIERS", "PLAYER NAME", "TEAM", "POS", "BYE WEEK", "ECR VS. ADP"];
+  const missing = required.filter((header) => headerIndex[header] === undefined);
+  if (missing.length) {
+    throw new Error(`Missing CSV columns: ${missing.join(", ")}`);
+  }
+  return rows
+    .map((values) => mapFantasyProsCsvRow(headerIndex, values))
+    .filter((row) => row !== null);
+}
+
+function setFantasyProsImportStatus(message) {
   const target = $("#fp-import-status");
   if (!target) return;
-  if (!result) {
-    target.innerHTML = "";
-    return;
+  target.innerHTML = message ? `<div>${escapeHtml(message)}</div>` : "";
+}
+
+async function importFantasyProsCsvFile(file) {
+  const text = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read CSV file"));
+    reader.readAsText(file);
+  });
+  const rows = fantasyProsRowsFromCsv(text);
+  if (!rows.length) {
+    throw new Error("No player rows found in CSV");
   }
-  const lines = [
-    result.message || "",
-    result.ok
-      ? `Imported: ${result.imported_count} · Matched: ${result.matched} · Created: ${result.created} · Failed: ${result.failed}`
-      : "",
-  ].filter(Boolean);
-  target.innerHTML = lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+  return api("/api/rankings/import/csv", {
+    method: "POST",
+    body: JSON.stringify({
+      source_name: "fantasypros",
+      rows,
+    }),
+  });
 }
 
-function setFantasyProsManualVisible(visible) {
-  const textarea = $("#fp-rankings-json");
-  const label = $("#fp-manual-label");
-  if (!textarea || !label) return;
-  textarea.classList.toggle("is-hidden", !visible);
-  label.classList.toggle("fp-manual-visible", visible);
-}
-
-if ($("#fantasypros-form")) {
-  $("#fp-fetch-button")?.addEventListener("click", async () => {
-    const position = $("#fp-position")?.value || "overall";
-    renderFantasyProsImportStatus({ message: "Fetching FantasyPros rankings…" });
+if ($("#fp-import-btn")) {
+  $("#fp-import-btn").addEventListener("click", async () => {
+    const input = $("#fp-csv-upload");
+    const file = input?.files?.[0];
+    if (!file) {
+      setFantasyProsImportStatus("Import failed: Choose a CSV file first.");
+      toast("Choose a FantasyPros CSV file.");
+      return;
+    }
+    setFantasyProsImportStatus("Importing rankings…");
     try {
-      const response = await fetch("/api/integrations/fantasypros/fetch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ position }),
-      });
-      const result = await response.json();
-      renderFantasyProsImportStatus(result);
-      if (result.ok) {
-        setFantasyProsManualVisible(false);
-        await Promise.all([refreshPlayers(), refreshPlayersSearch(), refreshDraft()]);
-        toast(`Imported ${result.imported_count} FantasyPros rankings.`);
-      } else {
-        setFantasyProsManualVisible(true);
-        toast(result.message || "FantasyPros fetch failed.");
-      }
+      const result = await importFantasyProsCsvFile(file);
+      const message = `Imported ${result.imported_count} players — Matched: ${result.matched_players}  Created: ${result.created_players}`;
+      setFantasyProsImportStatus(message);
+      await Promise.all([refreshPlayers(), refreshPlayersSearch(), refreshDraft()]);
+      toast(message);
     } catch (error) {
-      const message = "FantasyPros fetch failed. Use manual JSON import instead.";
-      renderFantasyProsImportStatus({ ok: false, message });
-      setFantasyProsManualVisible(true);
+      const message = `Import failed: ${error.message}`;
+      setFantasyProsImportStatus(message);
       toast(message);
     }
-  });
-
-  $("#fantasypros-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const rows = parseRows($("#fp-rankings-json").value, "FantasyPros");
-    if (!rows) return;
-    const result = await api("/api/rankings/import/csv", {
-      method: "POST",
-      body: JSON.stringify({
-        source_name: "fantasypros",
-        rows,
-      }),
-    });
-    renderFantasyProsImportStatus({
-      ok: true,
-      message: `Manual import finished for ${result.source_name}.`,
-      imported_count: result.imported_count,
-      matched: result.matched_players,
-      created: result.created_players,
-      failed: result.skipped_count,
-    });
-    await Promise.all([refreshPlayers(), refreshPlayersSearch(), refreshDraft()]);
-    toast(`Imported ${result.imported_count} fantasypros rankings.`);
   });
 }
 
