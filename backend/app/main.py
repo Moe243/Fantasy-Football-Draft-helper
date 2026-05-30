@@ -15,6 +15,7 @@ from .config import settings
 from .models import DraftPick, Keeper
 from .providers.http import ProviderError
 from .providers.odds import OddsClient
+from .providers.fantasypros import FantasyProsFetchError, fetch_fantasypros_rankings
 from .providers.rankings_csv import import_ranking_rows
 from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
@@ -26,6 +27,7 @@ from .services.draft_history import draft_history_summary
 from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
 from .services.league_import import draft_mapping_for_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
+from .services.player_rankings import get_draft_board_rankings, get_player_rankings
 from .services.practice_draft import (
     get_current_practice,
     make_user_pick,
@@ -158,6 +160,26 @@ class FantasyHandler(BaseHTTPRequestHandler):
                     current_pick=current_pick,
                 ),
             }
+
+        if method == "GET" and path == "/api/draft/board/rankings":
+            return get_draft_board_rankings(
+                conn,
+                settings_record,
+                keepers,
+                picks,
+                limit=int(first(query, "limit") or "12"),
+                manager=first(query, "manager") or "me",
+                position=first(query, "position"),
+                search=first(query, "search"),
+                hide_drafted=bool_query(first(query, "hide_drafted"), default=True),
+                hide_keepers=bool_query(first(query, "hide_keepers"), default=True),
+                current_pick_override=optional_query_int(first(query, "current_pick")),
+            )
+
+        player_rankings_id = parse_player_rankings_path(path)
+        if method == "GET" and player_rankings_id:
+            current_pick = int(first(query, "current_pick") or current_pick_number(picks, keepers))
+            return get_player_rankings(conn, player_rankings_id, current_pick=current_pick)
 
         if path == "/api/league/settings":
             if method == "GET":
@@ -331,6 +353,26 @@ class FantasyHandler(BaseHTTPRequestHandler):
             limit = int(first(query, "limit") or "25")
             lookback = int(first(query, "lookback_hours") or "24")
             return enriched_sleeper_trending(conn, trend_type=trend_type, limit=limit, lookback_hours=lookback)
+
+        if method == "POST" and path == "/api/integrations/fantasypros/fetch":
+            payload = self.read_json()
+            position = str(payload.get("position") or "overall").strip().lower()
+            try:
+                rows = fetch_fantasypros_rankings(position)
+                imported = import_ranking_rows(conn, "fantasypros", rows)
+                return {
+                    "ok": True,
+                    "position": position,
+                    "message": f"Imported {imported['imported_count']} FantasyPros rankings.",
+                    "imported_count": imported["imported_count"],
+                    "matched": imported["matched_players"],
+                    "created": imported["created_players"],
+                    "failed": imported["skipped_count"],
+                }
+            except (FantasyProsFetchError, ProviderError, ValueError, json.JSONDecodeError):
+                return fantasypros_fetch_failure(position)
+            except Exception:
+                return fantasypros_fetch_failure(position)
 
         if method == "POST" and path == "/api/rankings/import/csv":
             payload = self.read_json()
@@ -566,6 +608,15 @@ def league_status(conn, league_id: str | None) -> dict[str, Any] | None:
     }
 
 
+def parse_player_rankings_path(path: str) -> str | None:
+    prefix = "/api/player/"
+    suffix = "/rankings"
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    player_id = path[len(prefix) : -len(suffix)].strip("/")
+    return player_id or None
+
+
 def first(query: dict[str, list[str]], name: str) -> str | None:
     values = query.get(name)
     return values[0] if values else None
@@ -577,6 +628,18 @@ def require(payload: dict[str, Any], name: str) -> str:
         raise ValueError(f"{name} is required")
     return str(value)
 
+
+
+def fantasypros_fetch_failure(position: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "position": position,
+        "message": "FantasyPros fetch failed. Use manual JSON import instead.",
+        "imported_count": 0,
+        "matched": 0,
+        "created": 0,
+        "failed": 0,
+    }
 
 def require_query(query: dict[str, list[str]], name: str) -> str:
     value = first(query, name)

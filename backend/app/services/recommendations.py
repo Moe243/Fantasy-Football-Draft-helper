@@ -12,6 +12,7 @@ from ..models import DraftPick, Keeper, LeagueSettings, Player, Recommendation
 from ..sample_data import SAMPLE_PLAYERS, players_by_id
 from .consensus import get_consensus_rows
 from .normalization import normalize_name, normalize_position
+from .source_comparison import attach_source_comparison
 
 
 FANTASY_POSITIONS = ("QB", "RB", "WR", "TE", "DEF", "K")
@@ -256,9 +257,9 @@ def score_database_player(
     )
     item = dict(item)
     item["score"] = round(score, 2)
-    item["fit"] = fit_label(score)
+    item["fit"] = consensus.get("label") or fit_label(score)
     item["reasons"] = reasons
-    return item
+    return attach_source_comparison(item, current_pick)
 
 
 def database_reasons(

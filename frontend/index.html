@@ -304,6 +304,58 @@
               <p class="helper-copy">Sleeper can import league settings, rosters, users, draft metadata, and picks. Manual keeper entry stays available when keeper slots are not encoded cleanly.</p>
             </section>
 
+            <section class="panel" id="fantasypros-panel">
+              <h3>FantasyPros Rankings</h3>
+              <p class="helper-copy">Auto-fetch public consensus rankings, or paste JSON manually if fetch is blocked.</p>
+              <form id="fantasypros-form" class="stack-form">
+                <label>
+                  Position
+                  <select id="fp-position">
+                    <option value="overall">Overall</option>
+                    <option value="qb">QB</option>
+                    <option value="rb">RB</option>
+                    <option value="wr">WR</option>
+                    <option value="te">TE</option>
+                  </select>
+                </label>
+                <button type="button" class="primary-button" id="fp-fetch-button">Auto-fetch FantasyPros Rankings</button>
+                <label id="fp-manual-label">
+                  Manual rankings JSON
+                  <textarea id="fp-rankings-json" rows="9" spellcheck="false" class="is-hidden">[
+  {
+    "player_name": "Ja'Marr Chase",
+    "team": "CIN",
+    "position": "WR",
+    "overall_rank": 2,
+    "position_rank": "WR1",
+    "adp": 2.6,
+    "projected_points": 304.8,
+    "tier": 1,
+    "bye_week": 10
+  }
+]</textarea>
+                </label>
+                <details class="helper-details">
+                  <summary>Show expected format</summary>
+                  <pre class="helper-pre">[
+  {
+    "player_name": "Ja'Marr Chase",
+    "team": "CIN",
+    "position": "WR",
+    "overall_rank": 2,
+    "position_rank": "WR1",
+    "adp": 2.6,
+    "projected_points": 304.8,
+    "tier": 1,
+    "bye_week": 10
+  }
+]</pre>
+                </details>
+                <button type="submit" class="ghost-button">Import FantasyPros JSON</button>
+              </form>
+              <div id="fp-import-status" class="compact-list setup-status"></div>
+            </section>
+
             <section class="panel">
               <h3>Rankings JSON</h3>
               <form id="rankings-form" class="stack-form">
