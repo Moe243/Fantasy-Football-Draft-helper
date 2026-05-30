@@ -76,7 +76,7 @@ def simulate_next(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
     if pick_context.get("is_mine"):
         raise ValueError("Cannot simulate while you are on the clock. Make your pick first.")
-    player_id = choose_mock_pick_for_context(conn, league_id, int(draft["id"]), pick_context)
+    player_id = choose_auto_pick(conn, league_id, int(draft["id"]))
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "simulated")
     recalculate_current_pick(conn, league_id, int(draft["id"]))
     return get_current_practice(conn, league_id)
@@ -177,37 +177,17 @@ def pick_context_for(conn: sqlite3.Connection, league_id: str, pick_no: int) -> 
     return {"pick_no": pick_no, "round": round_no, "draft_slot": slot, "manager_name": f"Slot {slot}", "is_mine": 0}
 
 
-def choose_mock_pick_for_context(
-    conn: sqlite3.Connection,
-    league_id: str,
-    practice_draft_id: int,
-    context: dict[str, Any],
-) -> str:
-    from .mock_draft_ai import choose_mock_pick
-
-    return choose_mock_pick(
-        conn,
-        league_id,
-        practice_draft_id,
-        int(context.get("pick_no") or 1),
-        context.get("current_roster_id") or context.get("original_roster_id"),
-        context.get("manager_name"),
-    )
-
-
-def mock_draft_metadata(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
-    draft = active_practice(conn, league_id)
-    if not draft:
-        return {"active": False}
-    max_pick = max_pick_for_league(conn, league_id)
-    current = int(draft["current_pick"] or 1)
-    return {
-        "active": True,
-        "practice_draft_id": int(draft["id"]),
-        "current_pick": current,
-        "max_pick": max_pick,
-        "is_complete": current > max_pick,
-    }
+def choose_auto_pick(conn: sqlite3.Connection, league_id: str, practice_draft_id: int) -> str:
+    unavailable = drafted_player_ids(conn, league_id) | practice_drafted_player_ids(conn, practice_draft_id)
+    for row in get_consensus_rows(conn, limit=500, current_pick=1):
+        player_id = row["player"]["internal_player_id"]
+        position = row["player"].get("position")
+        if player_id in unavailable:
+            continue
+        if position in {"K", "DEF"} and len(unavailable) < 100:
+            continue
+        return player_id
+    raise ValueError("No available players to simulate")
 
 
 def practice_drafted_player_ids(conn: sqlite3.Connection, practice_draft_id: int) -> set[str]:

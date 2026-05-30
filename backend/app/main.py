@@ -36,6 +36,7 @@ from .services.user_preferences import (
 )
 from .services.draft_board import get_draft_board
 from .services.draft_history import draft_history_summary
+from .services.keepers import add_keeper, list_keepers, remove_keeper
 from .services.draft_room import get_draft_state, league_draft_recommendations, make_draft_pick, remove_draft_pick
 from .services.league_import import draft_mapping_for_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
@@ -104,7 +105,8 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
     def route_api(self, conn, method: str, path: str, query: dict[str, list[str]]) -> Any:
         settings_record = db.get_league_settings(conn)
-        keepers = db.get_keepers(conn)
+        league_id_ctx = first(query, "league_id") if method == "GET" else None
+        keepers = db.get_keepers(conn, league_id_ctx)
         picks = db.get_draft_picks(conn)
 
         if method == "GET" and path == "/api/health":
@@ -202,26 +204,30 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
         if path == "/api/keepers":
             if method == "GET":
-                return {"keepers": [enrich_keeper(conn, keeper) for keeper in keepers]}
+                league_id = first(query, "league_id")
+                return {"keepers": list_keepers(conn, league_id)}
             if method == "POST":
                 payload = self.read_json()
-                keeper = Keeper(
-                    player_id=require(payload, "player_id"),
-                    team_name=str(payload.get("team_name") or "Unknown team"),
-                    round=optional_int(payload.get("round")),
+                league_id = require(payload, "league_id")
+                validate_player_id(conn, require(payload, "player_id"))
+                return add_keeper(
+                    conn,
+                    league_id,
+                    require(payload, "player_id"),
+                    roster_id=optional_int(payload.get("roster_id")),
+                    sleeper_user_id=payload.get("sleeper_user_id"),
+                    round_no=optional_int(payload.get("round")) or 15,
                     pick_no=optional_int(payload.get("pick_no")),
                 )
-                validate_player_id(conn, keeper.player_id)
-                db.upsert_keeper(conn, keeper)
-                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
             if method == "DELETE":
                 player_id = first(query, "player_id")
+                league_id = first(query, "league_id")
+                roster_id = optional_int(first(query, "roster_id"))
                 team_name = first(query, "team_name")
-                if player_id and team_name:
-                    db.delete_keeper(conn, player_id, team_name)
-                else:
-                    db.clear_keepers(conn)
-                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
+                if player_id and (league_id or team_name):
+                    return remove_keeper(conn, league_id, player_id, roster_id=roster_id, team_name=team_name)
+                db.clear_keepers(conn)
+                return {"keepers": list_keepers(conn, league_id)}
 
         if path == "/api/draft/picks":
             if method == "GET":
