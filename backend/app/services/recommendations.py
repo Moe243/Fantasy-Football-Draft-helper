@@ -11,7 +11,6 @@ from typing import Any
 from ..models import DraftPick, Keeper, LeagueSettings, Player, Recommendation
 from ..sample_data import SAMPLE_PLAYERS, players_by_id
 from .consensus import get_consensus_rows
-from .draft_ranking_engine import score_draft_candidate
 from .normalization import normalize_name, normalize_position
 
 
@@ -177,7 +176,6 @@ def database_draft_recommendations(
     league_id: str | None = None,
 ) -> list[dict[str, Any]]:
     current_pick = current_pick_override or current_pick_number(picks, keepers)
-    teams = int(settings.teams or 10)
     consensus_rows = get_consensus_rows(
         conn,
         position=position,
@@ -200,8 +198,17 @@ def database_draft_recommendations(
 
     counts = database_roster_counts(conn, picks, manager=manager)
     desired = desired_position_counts(settings)
+    from .draft_ranking_engine import score_draft_candidate
+
     scored = [
-        score_draft_candidate(conn, league_id, item, desired, counts, current_pick, teams=teams)
+        score_draft_candidate(
+            conn,
+            item,
+            league_id=league_id,
+            desired=desired,
+            counts=counts,
+            current_pick=current_pick,
+        )
         for item in filtered
     ]
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]

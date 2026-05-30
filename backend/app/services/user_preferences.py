@@ -1,10 +1,12 @@
-"""User favorites and draft preference storage."""
+"""User favorites and personal draft preferences."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from typing import Any
+
+from .. import db
 
 
 def list_favorites(conn: sqlite3.Connection, league_id: str) -> list[dict[str, Any]]:
@@ -18,10 +20,27 @@ def list_favorites(conn: sqlite3.Connection, league_id: str) -> list[dict[str, A
         """,
         (league_id,),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {
+            "league_id": row["league_id"],
+            "player_id": row["player_id"],
+            "notes": row["notes"],
+            "player": db.player_row_to_api(db.get_player_row(conn, row["player_id"]))
+            if db.get_player_row(conn, row["player_id"])
+            else {"internal_player_id": row["player_id"], "full_name": row["full_name"]},
+        }
+        for row in rows
+    ]
 
 
-def add_favorite(conn: sqlite3.Connection, league_id: str, player_id: str, notes: str | None = None) -> dict[str, Any]:
+def add_favorite(
+    conn: sqlite3.Connection,
+    league_id: str,
+    player_id: str,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    if not db.get_player_row(conn, player_id):
+        raise ValueError(f"Unknown player_id: {player_id}")
     conn.execute(
         """
         INSERT INTO user_favorite_players (league_id, player_id, notes)
@@ -31,7 +50,7 @@ def add_favorite(conn: sqlite3.Connection, league_id: str, player_id: str, notes
         (league_id, player_id, notes),
     )
     conn.commit()
-    return {"status": "saved", "player_id": player_id}
+    return {"favorites": list_favorites(conn, league_id)}
 
 
 def remove_favorite(conn: sqlite3.Connection, league_id: str, player_id: str) -> dict[str, Any]:
@@ -40,28 +59,28 @@ def remove_favorite(conn: sqlite3.Connection, league_id: str, player_id: str) ->
         (league_id, player_id),
     )
     conn.commit()
-    return {"status": "removed", "player_id": player_id}
+    return {"favorites": list_favorites(conn, league_id)}
 
 
-def favorite_player_ids(conn: sqlite3.Connection, league_id: str) -> set[str]:
-    rows = conn.execute(
-        "SELECT player_id FROM user_favorite_players WHERE league_id = ?",
-        (league_id,),
-    ).fetchall()
-    return {row["player_id"] for row in rows}
-
-
-def get_preferences(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
+def get_draft_preferences(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM user_draft_preferences WHERE league_id = ?",
         (league_id,),
     ).fetchone()
     if not row:
         return default_preferences(league_id)
-    return preferences_from_row(row)
+    data = dict(row)
+    data["position_weights"] = _json_dict(data.pop("position_weights_json", None))
+    data["stack_preferences"] = _json_dict(data.pop("stack_preferences_json", None))
+    return data
 
 
-def save_preferences(conn: sqlite3.Connection, league_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def save_draft_preferences(conn: sqlite3.Connection, league_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    current = get_draft_preferences(conn, league_id)
+    reach_bias = float(payload.get("reach_bias", current.get("reach_bias", 0)))
+    value_bias = float(payload.get("value_bias", current.get("value_bias", 0)))
+    position_weights = payload.get("position_weights", current.get("position_weights", {}))
+    stack_preferences = payload.get("stack_preferences", current.get("stack_preferences", {}))
     conn.execute(
         """
         INSERT INTO user_draft_preferences (
@@ -77,14 +96,14 @@ def save_preferences(conn: sqlite3.Connection, league_id: str, payload: dict[str
         """,
         (
             league_id,
-            float(payload.get("reach_bias") or 0),
-            float(payload.get("value_bias") or 0),
-            json.dumps(payload.get("position_weights") or {}),
-            json.dumps(payload.get("stack_preferences") or {}),
+            reach_bias,
+            value_bias,
+            json.dumps(position_weights),
+            json.dumps(stack_preferences),
         ),
     )
     conn.commit()
-    return get_preferences(conn, league_id)
+    return get_draft_preferences(conn, league_id)
 
 
 def default_preferences(league_id: str) -> dict[str, Any]:
@@ -97,27 +116,11 @@ def default_preferences(league_id: str) -> dict[str, Any]:
     }
 
 
-def preferences_from_row(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "league_id": row["league_id"],
-        "reach_bias": float(row["reach_bias"] or 0),
-        "value_bias": float(row["value_bias"] or 0),
-        "position_weights": json.loads(row["position_weights_json"] or "{}"),
-        "stack_preferences": json.loads(row["stack_preferences_json"] or "{}"),
-        "updated_at": row["updated_at"],
-    }
-
-
-def user_tendencies_for_round(
-    conn: sqlite3.Connection,
-    league_id: str,
-    round_no: int,
-    position: str,
-) -> sqlite3.Row | None:
-    return conn.execute(
-        """
-        SELECT * FROM user_draft_tendencies
-        WHERE league_id = ? AND round = ? AND position = ?
-        """,
-        (league_id, round_no, position),
-    ).fetchone()
+def _json_dict(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}

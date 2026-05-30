@@ -38,7 +38,7 @@ class OddsClient:
         self,
         event_id: str,
         regions: str = "us",
-        markets: str = "player_pass_yds,player_rush_yds,player_reception_yds,player_anytime_td",
+        markets: str = "player_pass_yds,player_rush_yds,player_reception_yds",
     ) -> dict[str, Any]:
         if not self.api_key:
             raise ProviderError("ODDS_API_KEY is not configured.")

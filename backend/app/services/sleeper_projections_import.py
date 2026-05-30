@@ -4,59 +4,78 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from typing import Any
 
-from .. import db
-from ..providers.sleeper import SleeperClient
 from ..providers.sleeper_projections import SleeperProjectionsClient
 
 
-def import_sleeper_projections(conn: sqlite3.Connection, season: int | None = None, week: int | None = None) -> dict[str, Any]:
-    state = SleeperClient().nfl_state()
-    season = int(season or state.get("season") or 2025)
-    week = int(week or state.get("week") or 1)
-    run_id = db.start_import_run(conn, "sleeper_projection", "projections")
-    try:
-        rows = SleeperProjectionsClient().fetch_week_projections(season, week)
-        imported = _upsert_rows(conn, rows, season, week)
-        db.finish_import_run(conn, run_id, "success", records_imported=imported)
-        return {"status": "success", "season": season, "week": week, "records_imported": imported}
-    except Exception as exc:
-        db.finish_import_run(conn, run_id, "error", error_message=str(exc))
-        raise
+def _internal_player_id(conn: sqlite3.Connection, sleeper_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT internal_player_id FROM players WHERE sleeper_id = ?",
+        (sleeper_id,),
+    ).fetchone()
+    if row:
+        return row["internal_player_id"]
+    candidate = f"sleeper_{sleeper_id}"
+    row = conn.execute(
+        "SELECT internal_player_id FROM players WHERE internal_player_id = ?",
+        (candidate,),
+    ).fetchone()
+    return row["internal_player_id"] if row else None
 
 
-def _upsert_rows(conn: sqlite3.Connection, rows: list[dict[str, Any]], season: int, week: int) -> int:
+def import_sleeper_projections(
+    conn: sqlite3.Connection,
+    season: int = 2025,
+    week: int = 1,
+) -> dict[str, Any]:
+    client = SleeperProjectionsClient()
+    rows = client.fetch_week(season, week)
     imported = 0
     for row in rows:
-        player_id = row.get("player_id")
-        if not player_id:
+        sleeper_id = str(row.get("player_id") or "")
+        internal_id = _internal_player_id(conn, sleeper_id)
+        if not internal_id:
             continue
-        internal_id = f"sleeper_{player_id}"
-        player_row = conn.execute(
-            "SELECT internal_player_id FROM players WHERE sleeper_id = ? OR internal_player_id = ?",
-            (str(player_id), internal_id),
-        ).fetchone()
-        if not player_row:
-            continue
-        internal_id = player_row["internal_player_id"]
-        stats = row.get("stats") or {}
-        projected = stats.get("pts_ppr") or stats.get("pts_std") or stats.get("fantasy_points")
+        stats = row.get("stats") or row
+        projected = _projected_points(stats)
         if projected is None:
             continue
         conn.execute(
             """
             INSERT INTO player_source_rankings (
-                internal_player_id, source_name, projected_points, raw_json, imported_at
+                internal_player_id, source_name, source_player_id,
+                projected_points, raw_json, imported_at
             )
-            VALUES (?, 'sleeper_projection', ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, 'sleeper_projection', ?, ?, ?, ?)
             ON CONFLICT(internal_player_id, source_name) DO UPDATE SET
                 projected_points = excluded.projected_points,
                 raw_json = excluded.raw_json,
-                imported_at = CURRENT_TIMESTAMP
+                imported_at = excluded.imported_at
             """,
-            (internal_id, float(projected), json.dumps({"season": season, "week": week, **row})),
+            (
+                internal_id,
+                sleeper_id,
+                projected,
+                json.dumps(row),
+                datetime.utcnow().isoformat(),
+            ),
         )
         imported += 1
+    conn.execute(
+        """
+        INSERT INTO source_import_runs (source_name, import_type, status, records_imported, finished_at)
+        VALUES ('sleeper_projection', 'projections', 'ok', ?, CURRENT_TIMESTAMP)
+        """,
+        (imported,),
+    )
     conn.commit()
-    return imported
+    return {"imported": imported, "season": season, "week": week, "source": "sleeper_projection"}
+
+
+def _projected_points(stats: dict[str, Any]) -> float | None:
+    for key in ("pts_ppr", "pts_half_ppr", "pts_std", "fantasy_points", "fpts"):
+        if stats.get(key) is not None:
+            return float(stats[key])
+    return None

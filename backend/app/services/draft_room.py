@@ -17,7 +17,6 @@ from .practice_draft import (
     make_pick_at,
     overlay_practice_picks,
     recalculate_current_pick,
-    mock_draft_metadata,
     remove_practice_pick,
 )
 from .recommendations import database_draft_recommendations, desired_position_counts
@@ -59,8 +58,9 @@ def get_draft_state(
         current_pick_override=current_pick,
         league_id=league_id,
     )
-    draft_mode = 'mock' if practice else 'live'
-    mock_draft = mock_draft_metadata(conn, league_id, practice) if practice else None
+    max_pick = max_pick_for_board(board_data)
+    is_complete = current_pick > max_pick
+    draft_mode = "mock" if practice else "live"
     my_picks = enrich_my_picks(conn, league_id, board_data.get("my_picks") or [], current_pick)
     likely_available = []
     next_my_pick = next((pick for pick in my_picks if int(pick["pick_no"]) >= current_pick), None)
@@ -68,6 +68,10 @@ def get_draft_state(
         likely_available = next_my_pick.get("likely_available") or []
 
     return {
+        "league_id": league_id,
+        "draft_mode": draft_mode,
+        "is_complete": is_complete,
+        "mock_draft": mock_draft_metadata(practice, current_pick, max_pick, is_complete),
         "league": board_data.get("league"),
         "active_draft_id": board_data.get("active_draft_id"),
         "managers": board_data.get("managers") or [],
@@ -88,8 +92,6 @@ def get_draft_state(
         "practice": dict(practice) if practice else None,
         "practice_picks": practice_picks,
         "last_pick": last_pick,
-        "draft_mode": draft_mode,
-        "mock_draft": mock_draft,
     }
 
 
@@ -322,6 +324,68 @@ def manager_for_roster(conn: sqlite3.Connection, league_id: str, roster_id: Any)
         (league_id, roster_id),
     ).fetchone()
     return dict(row) if row else None
+
+
+def max_pick_for_board(board_data: dict[str, Any]) -> int:
+    picks = [
+        int(cell["pick_no"])
+        for row in board_data.get("board") or []
+        for cell in row.get("picks") or []
+    ]
+    return max(picks) if picks else 160
+
+
+def mock_draft_metadata(
+    practice: Any,
+    current_pick: int,
+    max_pick: int,
+    is_complete: bool,
+) -> dict[str, Any]:
+    return {
+        "active": practice is not None,
+        "current_pick": current_pick,
+        "max_pick": max_pick,
+        "is_complete": is_complete,
+        "picks_remaining": max(0, max_pick - current_pick + 1) if not is_complete else 0,
+    }
+
+
+def league_draft_recommendations(
+    conn: sqlite3.Connection,
+    league_id: str,
+    pick_no: int | None = None,
+    limit: int = 12,
+    position: str | None = None,
+) -> dict[str, Any]:
+    settings = db.get_league_settings(conn)
+    keepers = db.get_keepers(conn)
+    board_data = get_draft_board(conn, league_id)
+    practice = active_practice(conn, league_id)
+    if practice:
+        picks_rows = conn.execute(
+            "SELECT * FROM practice_draft_picks WHERE practice_draft_id = ? ORDER BY pick_no",
+            (practice["id"],),
+        ).fetchall()
+        overlay_practice_picks(conn, board_data, [dict(row) for row in picks_rows])
+    current = int(pick_no or (practice["current_pick"] if practice else first_open_pick(board_data)))
+    board_picks = board_to_draft_picks(board_data)
+    recs = database_draft_recommendations(
+        conn,
+        settings,
+        keepers,
+        board_picks,
+        limit=limit,
+        position=position,
+        current_pick_override=current,
+        league_id=league_id,
+    )
+    cell = find_pick_cell(board_data, current)
+    return {
+        "current_pick": current,
+        "is_my_pick": bool(cell and cell.get("is_mine")),
+        "draft_mode": "mock" if practice else "live",
+        "recommendations": recs,
+    }
 
 
 def pick_summary(conn: sqlite3.Connection, league_id: str, pick_no: int, player_id: str, source: str) -> dict[str, Any]:

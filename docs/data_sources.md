@@ -1,47 +1,37 @@
-# Data Sources Setup
+# Data sources
 
-## The Odds API (game lines and player props)
+This app uses a small set of **honest** integrations. Keys in `.env` only enable what is actually wired.
 
-1. Create an account at https://the-odds-api.com/
-2. Copy your API key into `.env` as `ODDS_API_KEY`
-3. In the app Setup tab, click **Import NFL Odds**
-4. Player props require a paid tier and an event ID:
-   - `GET /api/integrations/odds/events` lists NFL events
-   - `POST /api/integrations/odds/props/import` with `{ "event_id": "..." }`
+## Required for full mock-draft signals
 
-DraftKings, FanDuel, and Caesars lines are aggregated through The Odds API bookmakers. There is no separate public fantasy API key for those brands.
+| Source | Env var | Notes |
+|--------|---------|--------|
+| Sleeper players | _(none)_ | Public `api.sleeper.app/v1` — import from Setup |
+| Rankings / projections | _(import)_ | `POST /api/rankings/import/csv` with `source_name` such as `fantasypros` or `espn` |
 
-## Sleeper (league data and projections)
+## Optional enhancements
 
-- **League/players:** public API, no key required. Use Setup → Import League.
-- **Projections:** unofficial endpoint `https://api.sleeper.app/projections/nfl/{season}/{week}`. Use Setup → **Import Sleeper Projections**.
+| Source | Env var | Notes |
+|--------|---------|--------|
+| The Odds API | `ODDS_API_KEY` | Game lines via `POST /api/integrations/odds/import`; player props need event id + often a paid tier |
+| Sleeper projections | _(none)_ | Unofficial `api.sleeper.app/projections/nfl/{season}/{week}` — `POST /api/integrations/sleeper/projections/import` |
 
-## ESPN fantasy rankings
+## Placeholders (not live fantasy APIs)
 
-ESPN does not provide a stable public fantasy API key (`ESPN_API_KEY` is a placeholder only).
+- `ESPN_API_KEY` — no public ESPN fantasy API. Export ranks from ESPN or FantasyPros and import JSON with `source_name = espn`.
+- `DRAFTKINGS_API_KEY`, `FANDUEL_API_KEY`, `CAESARS_API_KEY`, `DRAFT365_API_KEY` — stubs only. Props are aggregated through The Odds API bookmakers when configured.
 
-Import rankings manually:
+## ESPN rankings workflow
 
-1. Export or build a JSON array of ranking rows
-2. Setup → Rankings JSON
-3. Set **source name** to `espn`
-4. Click **Import Rankings JSON**
+1. Export or copy rankings into JSON rows (`player_name`, `position`, `team`, `overall_rank`, `projected_points`, …).
+2. Open **Setup → Rankings JSON**, set `source_name` to `espn`, paste rows, submit.
+3. Use **Refresh Consensus** so best-available uses the new source.
 
-Example row:
+## Refresh order (manual)
 
-```json
-{
-  "player_name": "Ja'Marr Chase",
-  "team": "CIN",
-  "position": "WR",
-  "overall_rank": 5,
-  "adp": 6.2,
-  "projected_points": 300
-}
-```
+1. Refresh Sleeper players  
+2. Import Sleeper projections (optional)  
+3. Import odds / props if `ODDS_API_KEY` is set  
+4. Import rankings (ESPN / FantasyPros CSV or JSON)
 
-## Personal draft style
-
-- **Favorites:** star players in the mock draft pick sheet
-- **Reach/value bias:** Setup → Favorites and Draft Style
-- **Tendencies:** **Calculate My Tendencies** uses your imported Sleeper pick history
+Check status: `GET /api/setup/data-sources`

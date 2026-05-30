@@ -88,11 +88,14 @@ python3 -m unittest discover backend/tests
 3. The app imports league settings, managers, rosters, drafts, draft picks, draft order, available traded-pick data, and recent discoverable draft history.
 4. If the app cannot know which roster is yours, choose it from **My Team** and save it.
 5. Use the Draft Board tab to see the full manager-by-round grid, highlighted picks, upcoming picks, likely available players, and best available recommendations.
-6. Use the Practice tab to start a draft, simulate opponent picks, simulate to your next pick, make your pick, and reset.
-7. Use the Players tab to search/filter the player database and open a detail view with profile, rankings, stats, projections, props, news, and notes.
-8. Import rankings, stats, or props JSON when a provider does not have a configured official/licensed API.
-9. Ask the chatbot draft, keeper, waiver, and matchup questions.
-10. Use the Waivers tab to pull enriched Sleeper trending adds when player data is imported.
+6. Use the **Mock Draft** tab: start a mock, click the on-the-clock board cell for a compact pick sheet, draft, simulate opponents (not while you are on the clock), and reset.
+7. In Setup, mark favorite players, set reach/value bias, and refresh optional Sleeper projections or Odds API data.
+8. Use the Players tab to search/filter the player database and open a detail view with profile, rankings, stats, projections, props, news, and notes.
+9. Import rankings, stats, or props JSON when a provider does not have a configured official/licensed API (use `source_name = espn` for ESPN-style exports).
+10. Ask the chatbot draft, keeper, waiver, and matchup questions.
+11. Use the Waivers tab to pull enriched Sleeper trending adds when player data is imported.
+
+See [docs/data_sources.md](docs/data_sources.md) for which env keys are real vs placeholders.
 
 ## Multi-Source Endpoints
 
@@ -107,10 +110,11 @@ python3 -m unittest discover backend/tests
 - `GET /api/players/consensus?position=RB&limit=100&current_pick=25`: compares available source rankings.
 - `GET /api/draft/board?league_id=...`: returns the Sleeper league draft grid, managers, my team, my picks, and likely available players.
 - `GET /api/draft/availability?league_id=...&pick_no=25`: estimates which players may last to a future pick.
-- `POST /api/practice/start`, `POST /api/practice/simulate-next`, `POST /api/practice/simulate-to-my-next-pick`, `POST /api/practice/pick`, `DELETE /api/practice/reset`: manage a saved mock/practice draft.
-- `GET /api/setup/data-sources`: configured keys and latest import status.
-- `POST /api/integrations/sleeper/projections/import`, `POST /api/integrations/odds/import`: refresh projection and odds data.
-- `GET/POST/DELETE /api/user/favorites`, `POST /api/user/draft-preferences`: favorites and personal ranking bias.
+- `POST /api/practice/start`, `POST /api/practice/simulate-next`, `POST /api/practice/simulate-to-my-next-pick`, `POST /api/practice/pick`, `DELETE /api/practice/reset`: manage a saved mock draft.
+- `GET /api/draft/recommendations?league_id=...&pick_no=...`: league-aware pick sheet recommendations.
+- `GET /api/setup/data-sources`: configured vs missing integrations and last import times.
+- `GET/POST/DELETE /api/user/favorites`, `GET/POST /api/user/draft-preferences`, `POST /api/user/tendencies/calculate`: personal ranking signals.
+- `POST /api/integrations/sleeper/projections/import`, `POST /api/integrations/odds/import`, `POST /api/integrations/odds/props/import`: optional live feeds.
 - `GET /api/integrations/sleeper/trending/enriched`: enriches Sleeper trending adds with local player and consensus data.
 
 ## Next Build Steps

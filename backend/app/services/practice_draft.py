@@ -8,8 +8,6 @@ from typing import Any
 from .availability import drafted_player_ids
 from .consensus import get_consensus_rows
 from .draft_board import get_draft_board
-from .mock_draft_ai import choose_mock_pick
-from .. import db as app_db
 
 
 def start_practice(conn: sqlite3.Connection, league_id: str, name: str | None = None) -> dict[str, Any]:
@@ -77,9 +75,8 @@ def simulate_next(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     draft = require_active(conn, league_id)
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
     if pick_context.get("is_mine"):
-        raise ValueError("Current pick is yours; draft manually from the board.")
-    settings = app_db.get_league_settings(conn)
-    player_id = choose_mock_pick(conn, league_id, int(draft["id"]), pick_context, settings)
+        raise ValueError("Cannot simulate while you are on the clock. Make your pick first.")
+    player_id = choose_mock_pick_for_context(conn, league_id, int(draft["id"]), pick_context)
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "simulated")
     recalculate_current_pick(conn, league_id, int(draft["id"]))
     return get_current_practice(conn, league_id)
@@ -180,28 +177,36 @@ def pick_context_for(conn: sqlite3.Connection, league_id: str, pick_no: int) -> 
     return {"pick_no": pick_no, "round": round_no, "draft_slot": slot, "manager_name": f"Slot {slot}", "is_mine": 0}
 
 
-def mock_draft_metadata(
+def choose_mock_pick_for_context(
     conn: sqlite3.Connection,
     league_id: str,
-    practice: sqlite3.Row,
-) -> dict[str, Any]:
-    practice_id = int(practice["id"])
+    practice_draft_id: int,
+    context: dict[str, Any],
+) -> str:
+    from .mock_draft_ai import choose_mock_pick
+
+    return choose_mock_pick(
+        conn,
+        league_id,
+        practice_draft_id,
+        int(context.get("pick_no") or 1),
+        context.get("current_roster_id") or context.get("original_roster_id"),
+        context.get("manager_name"),
+    )
+
+
+def mock_draft_metadata(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
+    draft = active_practice(conn, league_id)
+    if not draft:
+        return {"active": False}
     max_pick = max_pick_for_league(conn, league_id)
-    picks_made = conn.execute(
-        "SELECT COUNT(*) AS c FROM practice_draft_picks WHERE practice_draft_id = ? AND player_id IS NOT NULL",
-        (practice_id,),
-    ).fetchone()["c"]
-    current_pick = int(practice["current_pick"] or 1)
-    is_complete = current_pick > max_pick or picks_made >= max_pick
-    pick_context = pick_context_for(conn, league_id, min(current_pick, max_pick))
+    current = int(draft["current_pick"] or 1)
     return {
-        "id": practice_id,
-        "name": practice["name"],
-        "current_pick": current_pick,
+        "active": True,
+        "practice_draft_id": int(draft["id"]),
+        "current_pick": current,
         "max_pick": max_pick,
-        "picks_made": picks_made,
-        "is_complete": is_complete,
-        "is_my_pick": bool(pick_context.get("is_mine")),
+        "is_complete": current > max_pick,
     }
 
 

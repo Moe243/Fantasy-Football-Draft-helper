@@ -1,34 +1,24 @@
-"""Composable best-available scoring for draft recommendations."""
+"""Composable draft ranking beyond raw consensus ADP."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import Counter
 from typing import Any
 
+from .recommendations import database_reasons, desired_position_counts, fit_label
 from .normalization import normalize_position
-from .user_preferences import favorite_player_ids, get_preferences, user_tendencies_for_round
-
-
-
-def fit_label(score: float) -> str:
-    if score >= 120:
-        return "Priority target"
-    if score >= 80:
-        return "Strong fit"
-    if score >= 45:
-        return "Consider"
-    return "Watch list"
 
 
 def score_draft_candidate(
     conn: sqlite3.Connection,
-    league_id: str | None,
     item: dict[str, Any],
+    *,
+    league_id: str | None,
     desired: dict[str, int],
     counts: Counter[str],
     current_pick: int,
-    teams: int = 10,
 ) -> dict[str, Any]:
     player = item["player"]
     consensus = item["consensus"]
@@ -36,7 +26,11 @@ def score_draft_candidate(
     position = normalize_position(player.get("position") or "")
     consensus_rank = consensus.get("consensus_rank")
     projected_points = consensus.get("projected_points_avg") or 0.0
-    source_adps = [source.get("adp") for source in sources.values() if source.get("adp") is not None]
+    source_adps = [
+        source.get("adp")
+        for source in sources.values()
+        if source.get("adp") is not None
+    ]
     avg_adp = sum(float(value) for value in source_adps) / len(source_adps) if source_adps else None
     value_vs_rank = (current_pick - consensus_rank) if consensus_rank is not None else 0.0
     value_vs_adp = (current_pick - avg_adp) if avg_adp is not None else 0.0
@@ -51,117 +45,179 @@ def score_draft_candidate(
     disagreement_adjustment = 5.0 if disagreement >= 20 and value_vs_rank >= 8 else -3.0 if disagreement >= 20 else 0.0
     rank_component = max(0.0, 220.0 - float(consensus_rank or 220.0)) * 0.55
 
-    position_weight = 1.0
-    reach_mult = 1.0
-    value_mult = 1.0
-    if league_id:
-        prefs = get_preferences(conn, league_id)
-        position_weight = float(prefs.get("position_weights", {}).get(position, 1.0))
-        reach_mult = 1.0 + float(prefs.get("reach_bias") or 0)
-        value_mult = 1.0 + float(prefs.get("value_bias") or 0)
-        round_no = ((current_pick - 1) // max(teams, 1)) + 1
-        tendency = user_tendencies_for_round(conn, league_id, round_no, position)
-        if tendency and float(tendency["reach_rate"] or 0) > 0.35:
-            reach_mult += 0.08
-        if tendency and float(tendency["value_pick_rate"] or 0) > 0.35:
-            value_mult += 0.08
+    prefs = load_preferences(conn, league_id) if league_id else {}
+    reach_bias = float(prefs.get("reach_bias") or 0.0)
+    value_bias = float(prefs.get("value_bias") or 0.0)
+    position_weights = prefs.get("position_weights") or {}
+    position_multiplier = float(position_weights.get(position, 1.0))
 
-    player_id = player.get("internal_player_id")
-    favorite_boost = 20.0 if league_id and player_id in favorite_player_ids(conn, league_id) else 0.0
-    odds_bonus, prop_bonus, odds_reason = scoring_odds_signals(conn, player_id, player.get("team"))
-    projection_bonus = sleeper_projection_bonus(conn, player_id, projected_points)
+    sleeper_proj = projection_bonus(conn, player["internal_player_id"], sources)
+    odds_signal, prop_bonus = odds_signals(conn, player["internal_player_id"], team=player.get("team"))
+    favorite_boost = favorite_bonus(conn, league_id, player["internal_player_id"])
+    tendency_adjust = tendency_adjustment(conn, league_id, position, value_vs_rank, reach_bias, value_bias)
 
     score = (
-        rank_component * position_weight
+        rank_component * position_multiplier
         + projected_points * 0.24
-        + projection_bonus
-        + value_vs_rank * 2.8 * value_mult
-        + max(0.0, -value_vs_rank) * 1.4 * reach_mult
+        + value_vs_rank * (2.8 + value_bias * 4.0)
         + value_vs_adp * 1.7
         + need_bonus
         + scarcity_bonus
         + disagreement_adjustment
-        + favorite_boost
-        + odds_bonus
+        + sleeper_proj
         + prop_bonus
+        + favorite_boost
+        + tendency_adjust
         - injury_penalty
     )
+    if value_vs_rank < -8 and reach_bias < 0:
+        score += reach_bias * 25.0
 
-    from .recommendations import database_reasons as full_database_reasons
-    reasons = list(
-        full_database_reasons(player, consensus, sources, current_pick, value_vs_rank, value_vs_adp, need_gap, injury_text)
+    reasons = database_reasons(
+        player,
+        consensus,
+        sources,
+        current_pick,
+        value_vs_rank,
+        value_vs_adp,
+        need_gap,
+        injury_text,
     )
     if favorite_boost:
-        reasons.insert(0, "On your favorites list.")
-    if projection_bonus:
-        reasons.insert(0, "Sleeper projection is above consensus average.")
-    if odds_reason:
-        reasons.append(odds_reason)
+        reasons.insert(0, "Marked as one of your favorite targets.")
+    if sleeper_proj >= 8:
+        reasons.append("Sleeper projection is above imported consensus average.")
+    if odds_signal:
+        reasons.append(odds_signal)
+    if tendency_adjust > 5:
+        reasons.append("Matches your historical tendency to take value at this position.")
+    elif tendency_adjust < -5:
+        reasons.append("Adjusted down based on your reach/value preferences.")
 
+    signals = {
+        "projection": round(projected_points, 2),
+        "adp": avg_adp,
+        "odds": prop_bonus,
+        "favorite": favorite_boost > 0,
+        "tendency": round(tendency_adjust, 2),
+        "sleeper_projection": sleeper_proj,
+    }
     result = dict(item)
     result["score"] = round(score, 2)
     result["fit"] = fit_label(score)
-    result["reasons"] = reasons[:5]
-    result["signals"] = {
-        "favorite": favorite_boost > 0,
-        "projection": projection_bonus > 0,
-        "odds": odds_bonus > 0 or prop_bonus > 0,
-    }
+    result["reasons"] = reasons[:6]
+    result["signals"] = signals
     return result
 
 
-def scoring_odds_signals(
+def load_preferences(conn: sqlite3.Connection, league_id: str | None) -> dict[str, Any]:
+    if not league_id:
+        return {}
+    row = conn.execute(
+        "SELECT * FROM user_draft_preferences WHERE league_id = ?",
+        (league_id,),
+    ).fetchone()
+    if not row:
+        return {}
+    data = dict(row)
+    if data.get("position_weights_json"):
+        try:
+            data["position_weights"] = json.loads(data["position_weights_json"])
+        except json.JSONDecodeError:
+            data["position_weights"] = {}
+    return data
+
+
+def favorite_bonus(conn: sqlite3.Connection, league_id: str | None, player_id: str) -> float:
+    if not league_id:
+        return 0.0
+    row = conn.execute(
+        "SELECT 1 FROM user_favorite_players WHERE league_id = ? AND player_id = ?",
+        (league_id, player_id),
+    ).fetchone()
+    return 20.0 if row else 0.0
+
+
+def projection_bonus(
     conn: sqlite3.Connection,
-    player_id: str | None,
+    player_id: str,
+    sources: dict[str, dict[str, Any]],
+) -> float:
+    sleeper = sources.get("sleeper_projection") or {}
+    proj = sleeper.get("projected_points")
+    if proj is None:
+        row = conn.execute(
+            """
+            SELECT projected_points FROM player_source_rankings
+            WHERE internal_player_id = ? AND source_name = 'sleeper_projection'
+            """,
+            (player_id,),
+        ).fetchone()
+        proj = row["projected_points"] if row else None
+    if proj is None:
+        return 0.0
+    consensus_proj = 0.0
+    count = 0
+    for source in sources.values():
+        if source.get("projected_points") is not None:
+            consensus_proj += float(source["projected_points"])
+            count += 1
+    if count == 0:
+        return min(12.0, float(proj) * 0.04)
+    delta = float(proj) - (consensus_proj / count)
+    return max(-6.0, min(14.0, delta * 0.35))
+
+
+def odds_signals(
+    conn: sqlite3.Connection,
+    player_id: str,
     team: str | None,
-) -> tuple[float, float, str | None]:
-    if not player_id:
-        return 0.0, 0.0, None
-    prop_row = conn.execute(
+) -> tuple[str | None, float]:
+    row = conn.execute(
         """
-        SELECT market, line FROM player_props
+        SELECT market, line, implied_probability, over_odds, under_odds
+        FROM player_props
         WHERE internal_player_id = ?
-        ORDER BY imported_at DESC LIMIT 1
+        ORDER BY imported_at DESC
+        LIMIT 1
         """,
         (player_id,),
     ).fetchone()
-    prop_bonus = 4.0 if prop_row else 0.0
-    game_bonus = 0.0
-    reason = None
-    if team:
-        game = conn.execute(
-            """
-            SELECT total FROM game_odds_snapshots
-            WHERE home_team = ? OR away_team = ?
-            ORDER BY imported_at DESC LIMIT 1
-            """,
-            (team, team),
-        ).fetchone()
-        if game and game["total"] and float(game["total"]) >= 47:
-            game_bonus = 3.0
-            reason = "High game total supports offensive upside."
-    if prop_row:
-        reason = f"Active prop market: {prop_row['market']} {prop_row['line']}."
-    return game_bonus, prop_bonus, reason
+    if not row:
+        return None, 0.0
+    implied = row["implied_probability"]
+    bonus = 4.0
+    message = f"Sportsbook {row['market'].replace('_', ' ')} line {row['line']}."
+    if implied is not None and float(implied) < 0.45:
+        bonus += 3.0
+        message += " Market implies upside vs projection."
+    return message, bonus
 
 
-def sleeper_projection_bonus(conn: sqlite3.Connection, player_id: str | None, baseline: float) -> float:
-    if not player_id:
+def tendency_adjustment(
+    conn: sqlite3.Connection,
+    league_id: str | None,
+    position: str,
+    value_vs_rank: float,
+    reach_bias: float,
+    value_bias: float,
+) -> float:
+    if not league_id:
         return 0.0
     row = conn.execute(
         """
-        SELECT projected_points FROM player_source_rankings
-        WHERE internal_player_id = ? AND source_name = 'sleeper_projection'
-        ORDER BY imported_at DESC LIMIT 1
+        SELECT reach_rate, value_pick_rate FROM user_draft_tendencies
+        WHERE league_id = ? AND position = ? AND round IS NULL
+        LIMIT 1
         """,
-        (player_id,),
+        (league_id, position),
     ).fetchone()
-    if not row or row["projected_points"] is None:
-        return 0.0
-    sleeper_pts = float(row["projected_points"])
-    if sleeper_pts > baseline + 8:
-        return 6.0
-    if sleeper_pts > baseline:
-        return 3.0
-    return 0.0
-
+    adjust = 0.0
+    if row:
+        if (row["value_pick_rate"] or 0) > 0.35 and value_vs_rank > 6:
+            adjust += 6.0
+        if (row["reach_rate"] or 0) > 0.35 and value_vs_rank < -6:
+            adjust -= 4.0
+    adjust += value_bias * 8.0
+    adjust += reach_bias * (6.0 if value_vs_rank < -6 else -4.0 if value_vs_rank > 8 else 0.0)
+    return adjust
