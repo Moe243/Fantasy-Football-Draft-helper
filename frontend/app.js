@@ -809,6 +809,7 @@ async function refreshLeagueManagers() {
     state.managers = [];
   }
   renderMyTeamSelect();
+  renderKeeperManagerSelect();
   renderDraftOrderMapping();
 }
 

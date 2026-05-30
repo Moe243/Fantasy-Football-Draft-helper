@@ -173,6 +173,7 @@ def database_draft_recommendations(
     hide_drafted: bool = True,
     hide_keepers: bool = True,
     current_pick_override: int | None = None,
+    league_id: str | None = None,
 ) -> list[dict[str, Any]]:
     current_pick = current_pick_override or current_pick_number(picks, keepers)
     consensus_rows = get_consensus_rows(
@@ -197,8 +198,17 @@ def database_draft_recommendations(
 
     counts = database_roster_counts(conn, picks, manager=manager)
     desired = desired_position_counts(settings)
+    from .draft_ranking_engine import score_draft_candidate
+
     scored = [
-        score_database_player(item, desired, counts, current_pick)
+        score_draft_candidate(
+            conn,
+            item,
+            league_id=league_id,
+            desired=desired,
+            counts=counts,
+            current_pick=current_pick,
+        )
         for item in filtered
     ]
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]

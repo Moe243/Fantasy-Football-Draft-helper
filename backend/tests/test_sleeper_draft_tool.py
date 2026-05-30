@@ -14,7 +14,7 @@ from backend.app.services.draft_room import get_draft_state, make_draft_pick, re
 from backend.app.services.league_import import build_draft_slot_mapping, import_sleeper_league, set_my_team, update_draft_slots
 from backend.app.services.player_detail import player_detail, search_players
 from backend.app.services.pick_ownership import calculate_pick_ownership, snake_draft_slot
-from backend.app.services.practice_draft import simulate_next, start_practice
+from backend.app.services.practice_draft import simulate_next, simulate_to_my_next_pick, start_practice
 from backend.app.services.props_analysis import analyze_props
 from backend.app.services.sleeper_import import import_sleeper_players
 
@@ -359,6 +359,31 @@ class SleeperDraftToolTests(unittest.TestCase):
         removed = remove_draft_pick(conn, "L1", 1)
         self.assertEqual(removed["current_pick"], 1)
         self.assertIsNone(removed["board"][0]["picks"][0]["player"])
+
+    def test_mock_draft_state_metadata_and_simulate_guard(self):
+        conn = memory_db()
+        seed_players(conn)
+        seed_rankings(conn)
+        import_sleeper_league(conn, "L1", client=FakeSleeperClient(picks=[]))
+        set_my_team(conn, "L1", 2)
+        start_practice(conn, "L1")
+        state_payload = get_draft_state(conn, "L1")
+        self.assertEqual(state_payload["draft_mode"], "mock")
+        simulate_to_my_next_pick(conn, "L1")
+        with self.assertRaises(ValueError):
+            simulate_next(conn, "L1")
+
+    def test_favorite_player_boosts_ranking(self):
+        conn = memory_db()
+        seed_players(conn)
+        seed_rankings(conn)
+        from backend.app.services.user_preferences import add_favorite
+        from backend.app.services.recommendations import database_draft_recommendations
+        from backend.app.models import LeagueSettings
+        add_favorite(conn, "L1", "sleeper_111")
+        recs = database_draft_recommendations(conn, LeagueSettings(), keepers=[], picks=[], limit=20, league_id="L1")
+        favorite_rec = next(item for item in recs if item["player"]["internal_player_id"] == "sleeper_111")
+        self.assertTrue(favorite_rec["signals"]["favorite"])
 
     def test_sleeper_draft_order_metadata_overrides_user_and_roster_order(self):
         conn = memory_db()

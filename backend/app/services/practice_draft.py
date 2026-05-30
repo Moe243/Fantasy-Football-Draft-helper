@@ -74,6 +74,8 @@ def make_pick_at(
 def simulate_next(conn: sqlite3.Connection, league_id: str) -> dict[str, Any]:
     draft = require_active(conn, league_id)
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
+    if pick_context.get("is_mine"):
+        raise ValueError("Cannot simulate while you are on the clock. Make your pick first.")
     player_id = choose_auto_pick(conn, league_id, int(draft["id"]))
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "simulated")
     recalculate_current_pick(conn, league_id, int(draft["id"]))

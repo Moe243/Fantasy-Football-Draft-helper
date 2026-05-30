@@ -21,9 +21,23 @@ from .sample_data import SAMPLE_PLAYERS, players_by_id
 from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
 from .services.data_imports import import_prop_rows, import_stat_rows
+
+from .services.data_sources import data_sources_status
+from .services.draft_room import league_draft_recommendations
+from .services.odds_import import import_event_props, import_nfl_odds, list_odds_events
+from .services.personal_tendencies import calculate_user_tendencies
+from .services.sleeper_projections_import import import_sleeper_projections
+from .services.user_preferences import (
+    add_favorite,
+    get_draft_preferences,
+    list_favorites,
+    remove_favorite,
+    save_draft_preferences,
+)
 from .services.draft_board import get_draft_board
 from .services.draft_history import draft_history_summary
-from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
+from .services.keepers import add_keeper, list_keepers, remove_keeper
+from .services.draft_room import get_draft_state, league_draft_recommendations, make_draft_pick, remove_draft_pick
 from .services.league_import import draft_mapping_for_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
 from .services.practice_draft import (
@@ -91,7 +105,8 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
     def route_api(self, conn, method: str, path: str, query: dict[str, list[str]]) -> Any:
         settings_record = db.get_league_settings(conn)
-        keepers = db.get_keepers(conn)
+        league_id_ctx = first(query, "league_id") if method == "GET" else None
+        keepers = db.get_keepers(conn, league_id_ctx)
         picks = db.get_draft_picks(conn)
 
         if method == "GET" and path == "/api/health":
@@ -105,6 +120,9 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 "latest_player_import": dict(latest_players) if latest_players else None,
                 "league": league_status(conn, league_id) if league_id else None,
             }
+
+        if method == "GET" and path == "/api/setup/data-sources":
+            return data_sources_status(conn)
 
         if method == "GET" and path == "/api/architecture":
             return {
@@ -186,26 +204,30 @@ class FantasyHandler(BaseHTTPRequestHandler):
 
         if path == "/api/keepers":
             if method == "GET":
-                return {"keepers": [enrich_keeper(conn, keeper) for keeper in keepers]}
+                league_id = first(query, "league_id")
+                return {"keepers": list_keepers(conn, league_id)}
             if method == "POST":
                 payload = self.read_json()
-                keeper = Keeper(
-                    player_id=require(payload, "player_id"),
-                    team_name=str(payload.get("team_name") or "Unknown team"),
-                    round=optional_int(payload.get("round")),
+                league_id = require(payload, "league_id")
+                validate_player_id(conn, require(payload, "player_id"))
+                return add_keeper(
+                    conn,
+                    league_id,
+                    require(payload, "player_id"),
+                    roster_id=optional_int(payload.get("roster_id")),
+                    sleeper_user_id=payload.get("sleeper_user_id"),
+                    round_no=optional_int(payload.get("round")) or 15,
                     pick_no=optional_int(payload.get("pick_no")),
                 )
-                validate_player_id(conn, keeper.player_id)
-                db.upsert_keeper(conn, keeper)
-                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
             if method == "DELETE":
                 player_id = first(query, "player_id")
+                league_id = first(query, "league_id")
+                roster_id = optional_int(first(query, "roster_id"))
                 team_name = first(query, "team_name")
-                if player_id and team_name:
-                    db.delete_keeper(conn, player_id, team_name)
-                else:
-                    db.clear_keepers(conn)
-                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
+                if player_id and (league_id or team_name):
+                    return remove_keeper(conn, league_id, player_id, roster_id=roster_id, team_name=team_name)
+                db.clear_keepers(conn)
+                return {"keepers": list_keepers(conn, league_id)}
 
         if path == "/api/draft/picks":
             if method == "GET":
@@ -374,6 +396,57 @@ class FantasyHandler(BaseHTTPRequestHandler):
         if method == "DELETE" and path == "/api/practice/reset":
             league_id = require_query(query, "league_id")
             return reset_practice(conn, league_id)
+
+
+        if method == "GET" and path == "/api/user/favorites":
+            return {"favorites": list_favorites(conn, require_query(query, "league_id"))}
+
+        if method == "POST" and path == "/api/user/favorites":
+            payload = self.read_json()
+            return add_favorite(
+                conn,
+                require(payload, "league_id"),
+                require(payload, "player_id"),
+                payload.get("notes"),
+            )
+
+        if method == "DELETE" and path == "/api/user/favorites":
+            return remove_favorite(
+                conn,
+                require_query(query, "league_id"),
+                require_query(query, "player_id"),
+            )
+
+        if method == "GET" and path == "/api/user/draft-preferences":
+            return get_draft_preferences(conn, require_query(query, "league_id"))
+
+        if method == "POST" and path == "/api/user/draft-preferences":
+            payload = self.read_json()
+            return save_draft_preferences(conn, require(payload, "league_id"), payload)
+
+        if method == "POST" and path == "/api/user/tendencies/calculate":
+            payload = self.read_json()
+            return calculate_user_tendencies(conn, require(payload, "league_id"))
+
+        if method == "POST" and path == "/api/integrations/odds/import":
+            return import_nfl_odds(conn)
+
+        if method == "POST" and path == "/api/integrations/odds/props/import":
+            payload = self.read_json()
+            return import_event_props(
+                conn,
+                require(payload, "event_id"),
+                str(payload.get("markets") or "player_pass_yds,player_rush_yds,player_reception_yds"),
+            )
+
+        if method == "GET" and path == "/api/integrations/odds/events":
+            return {"events": list_odds_events(conn)}
+
+        if method == "POST" and path == "/api/integrations/sleeper/projections/import":
+            payload = self.read_json()
+            season = int(payload.get("season") or 2025)
+            week = int(payload.get("week") or 1)
+            return import_sleeper_projections(conn, season=season, week=week)
 
         if method == "GET" and path == "/api/integrations/odds/nfl":
             return {"games": OddsClient().fetch_nfl_odds()}

@@ -30,7 +30,7 @@ def get_draft_state(
     last_pick: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = db.get_league_settings(conn)
-    keepers = db.get_keepers(conn)
+    keepers = db.get_keepers(conn, league_id)
     practice = active_practice(conn, league_id)
     if practice:
         recalculate_current_pick(conn, league_id, int(practice["id"]))
@@ -64,6 +64,8 @@ def get_draft_state(
         likely_available = next_my_pick.get("likely_available") or []
 
     return {
+        "league_id": league_id,
+        "draft_mode": "mock" if practice else "live",
         "league": board_data.get("league"),
         "active_draft_id": board_data.get("active_draft_id"),
         "managers": board_data.get("managers") or [],
