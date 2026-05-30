@@ -433,6 +433,7 @@ function renderPlayerDetail() {
         <h4>Rankings by Source</h4>
         ${rankingsTable(detail.rankings || {})}
       </section>
+      ${sourceComparisonSectionHtml(detail)}
       <section class="detail-section">
         <h4>Stats History</h4>
         ${statsTable(detail.stats || {}, "actual")}
@@ -455,6 +456,87 @@ function renderPlayerDetail() {
       </section>
     </article>
   `;
+}
+
+
+function sourceMetricDisplay(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return formatMetric(value);
+}
+
+function consensusLabelStyle(label) {
+  const styles = {
+    Undervalued: "color:#1b5e20",
+    "Strong Value": "color:#1b5e20",
+    "Fair Price": "color:#0d47a1",
+    "Fair Value": "color:#0d47a1",
+    Overpriced: "color:#e65100",
+    "Risky / Split Opinions": "color:#e65100",
+    "High Disagreement": "color:#c62828",
+  };
+  return styles[label] || "color:#616161";
+}
+
+function consensusLabelDot(label) {
+  const dots = {
+    Undervalued: "🟢",
+    "Strong Value": "🟢",
+    "Fair Price": "🔵",
+    "Fair Value": "🔵",
+    Overpriced: "🟠",
+    "Risky / Split Opinions": "🟠",
+    "High Disagreement": "🔴",
+  };
+  return dots[label] || "⚪";
+}
+
+function sourceComparisonSectionHtml(detail) {
+  const rankings = detail?.rankings || {};
+  const consensus = detail?.consensus || {};
+  const sourceKeys = [
+    { key: "sleeper", name: "Sleeper" },
+    { key: "espn", name: "ESPN" },
+    { key: "fantasypros", name: "FantasyPros" },
+  ];
+  const sourceRows = sourceKeys
+    .map(({ key, name }) => {
+      const row = rankings[key] || {};
+      const adp = sourceMetricDisplay(row.adp ?? (key === "sleeper" ? consensus.sleeper_adp : null));
+      const rank = sourceMetricDisplay(
+        row.overall_rank
+          ?? (key === "sleeper" ? consensus.sleeper_rank : key === "espn" ? consensus.espn_rank : key === "fantasypros" ? consensus.fantasypros_rank : null),
+      );
+      return `<div class="source-compare-row" style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e8e0d4;"><span>${escapeHtml(name)}</span><span>ADP: ${escapeHtml(adp)}&nbsp;&nbsp;Rank: ${escapeHtml(rank)}</span></div>`;
+    })
+    .join("");
+  const label = consensus.label || "No Consensus";
+  const consensusRank = sourceMetricDisplay(consensus.consensus_rank);
+  const sourceCount = consensus.source_count ?? 0;
+  return `
+    <section class="detail-section source-comparison-section">
+      <h4>Source Comparison</h4>
+      <div class="source-comparison-block" style="border:1px solid #e8e0d4;border-radius:10px;padding:12px;background:#fffdf7;">
+        ${sourceRows}
+        <div style="border-top:2px solid #e8e0d4;margin:8px 0;"></div>
+        <div class="source-compare-row" style="display:flex;justify-content:space-between;padding:6px 0;">
+          <span>Consensus</span>
+          <span>Rank: ${escapeHtml(consensusRank)}&nbsp;&nbsp;Sources: ${escapeHtml(String(sourceCount))}</span>
+        </div>
+        <div style="margin-top:8px;">Label: <span style="${consensusLabelStyle(label)};font-weight:600;">${escapeHtml(label)}</span></div>
+      </div>
+    </section>
+  `;
+}
+
+function bestAvailableConsensusLine(item) {
+  const consensus = item?.consensus;
+  if (!consensus) return "";
+  const rank = consensus.consensus_rank;
+  const rankText = rank != null ? `Consensus #${formatMetric(rank)}` : "Consensus —";
+  const count = consensus.source_count ?? 0;
+  const label = consensus.label || "No Consensus";
+  const dot = consensusLabelDot(label);
+  return `<p class="best-available-consensus-line" style="margin:6px 0 0;color:#5c5348;font-size:0.92rem;">${escapeHtml(rankText)} · ${escapeHtml(String(count))} source${count === 1 ? "" : "s"} · ${dot} ${escapeHtml(label)}</p>`;
 }
 
 function detailRow(label, value) {
