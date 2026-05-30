@@ -99,7 +99,7 @@ class MultisourceImportTests(unittest.TestCase):
         self.assertIsNotNone(matched)
         rows = get_consensus_rows(conn, position="WR", current_pick=25)
         self.assertEqual(rows[0]["consensus"]["source_count"], 3)
-        self.assertEqual(rows[0]["consensus"]["label"], "High Disagreement")
+        self.assertEqual(rows[0]["consensus"]["label"], "Risky / Split Opinions")
         self.assertEqual(rows[0]["consensus"]["fantasypros_rank"], 2.0)
         self.assertEqual(rows[0]["consensus"]["espn_rank"], 35.0)
 

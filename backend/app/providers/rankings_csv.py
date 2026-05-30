@@ -21,13 +21,15 @@ def import_ranking_rows(conn: sqlite3.Connection, source_name: str, rows: list[d
     run_id = db.start_import_run(conn, clean_source, "rankings_json")
     imported = 0
     skipped = 0
+    failed_rows: list[dict[str, Any]] = []
     created_players = 0
     matched_players = 0
     try:
-        for row in rows:
+        for index, row in enumerate(rows):
             player_name = str(row.get("player_name") or row.get("full_name") or row.get("name") or "").strip()
             if not player_name:
                 skipped += 1
+                failed_rows.append({"row_index": index, "reason": "missing player_name", "row": row})
                 continue
 
             position = normalize_position(str(row.get("position") or ""))
@@ -86,13 +88,17 @@ def import_ranking_rows(conn: sqlite3.Connection, source_name: str, rows: list[d
             )
             imported += 1
         db.finish_import_run(conn, run_id, "success", imported)
+        latest = db.latest_import_run(conn, clean_source, "rankings_json")
         return {
             "source_name": clean_source,
             "status": "success",
             "imported_count": imported,
+            "failed_count": len(failed_rows),
             "skipped_count": skipped,
+            "failed_rows": failed_rows[:50],
             "created_players": created_players,
             "matched_players": matched_players,
+            "last_import": dict(latest) if latest else None,
         }
     except Exception as exc:
         db.finish_import_run(conn, run_id, "error", imported, str(exc))

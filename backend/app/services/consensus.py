@@ -119,7 +119,7 @@ def build_consensus_row(
     rank_spread = (worst_source_rank - best_source_rank) if len(rank_values) > 1 else 0
     projected_points_avg = avg(projected_points)
     value_vs_current_pick = consensus_rank - current_pick if consensus_rank is not None else None
-    label = label_value(value_vs_current_pick, rank_spread)
+    label = label_value(value_vs_current_pick, rank_spread, len(rank_values))
 
     return {
         "player": player,
@@ -161,13 +161,19 @@ def nested_value(data: dict[str, dict[str, Any]], source: str, key: str) -> Any:
     return data.get(source, {}).get(key)
 
 
-def label_value(value_vs_current_pick: float | None, rank_spread: float | None) -> str:
+def label_value(
+    value_vs_current_pick: float | None,
+    rank_spread: float | None,
+    source_count: int = 0,
+) -> str:
+    if source_count < 2:
+        return "Not Enough Sources"
     if rank_spread is not None and rank_spread >= 20:
-        return "High Disagreement"
+        return "Risky / Split Opinions"
     if value_vs_current_pick is None:
-        return "No Consensus"
+        return "Not Enough Sources"
     if value_vs_current_pick <= -8:
-        return "Undervalued"
+        return "Strong Value"
     if value_vs_current_pick >= 8:
-        return "Overpriced"
-    return "Fair Price"
+        return "Risky / Split Opinions"
+    return "Fair Value"

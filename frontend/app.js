@@ -427,6 +427,10 @@ function renderPlayerDetail() {
           ${detailRow("Source Count", detail.consensus?.source_count)}
           ${detailRow("Spread", detail.consensus?.rank_spread)}
         </section>
+        <section class="detail-section">
+          <h4>Source Comparison</h4>
+          ${sourceComparisonRows(detail.source_comparison)}
+        </section>
       </div>
       <section class="detail-section">
         <h4>Rankings by Source</h4>
@@ -458,6 +462,63 @@ function renderPlayerDetail() {
 
 function detailRow(label, value) {
   return `<div class="detail-row two-column"><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatMetric(value))}</strong></div>`;
+}
+
+function sourceComparisonRows(comparison) {
+  if (!comparison) return emptyState("Import more sources to compare rankings.");
+  return [
+    detailRow("Sleeper ADP", comparison.sleeper_adp),
+    detailRow("ESPN Rank", comparison.espn_rank),
+    detailRow("FantasyPros Rank", comparison.fantasypros_rank),
+    detailRow("nflverse Fantasy Pts", comparison.nflverse_fantasy_points),
+    detailRow("Projected Points", comparison.projected_points),
+    detailRow("Consensus Rank", comparison.consensus_rank),
+    detailRow("Rank Spread", comparison.rank_spread),
+    detailRow("Sources", comparison.source_count),
+    detailRow("Value Label", comparison.value_label),
+  ].join("");
+}
+
+function renderImportCenterStatus() {
+  const container = $("#import-center-status");
+  if (!container) return;
+  const center = state.setupStatus?.import_center;
+  if (!center?.panels?.length) {
+    container.innerHTML = emptyState("Run Sleeper player import to begin.");
+    return;
+  }
+  container.innerHTML = center.panels
+    .map((panel) => {
+      const run = panel.latest_run;
+      const imported = run?.imported_count ?? panel.ranking_rows ?? panel.stat_rows ?? panel.players_loaded ?? 0;
+      const last = panel.last_import || run?.finished_at || "Never";
+      return `
+        <div class="compact-row">
+          <div>
+            <strong>${escapeHtml(panel.title)}</strong>
+            <span>${escapeHtml(panel.source_name)} · ${escapeHtml(String(imported))} records</span>
+          </div>
+          <small>${escapeHtml(String(last))}</small>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderImportResult(containerId, result) {
+  const container = $(containerId);
+  if (!container || !result) return;
+  const failed = (result.failed_rows || [])
+    .slice(0, 3)
+    .map((row) => `${row.reason || "failed"} (row ${row.row_index ?? "?"})`)
+    .join("; ");
+  container.innerHTML = [
+    statusLine("Source", result.source_name || ""),
+    statusLine("Imported", result.imported_count ?? 0),
+    statusLine("Failed", result.failed_count ?? 0),
+    failed ? statusLine("Failed rows", failed) : "",
+    result.last_import?.finished_at ? statusLine("Last import", result.last_import.finished_at) : "",
+  ].join("");
 }
 
 function rankingsTable(rankings) {
@@ -593,6 +654,7 @@ function renderDraftOrderMapping() {
 }
 
 function renderImportStatus() {
+  renderImportCenterStatus();
   const container = $("#import-status");
   if (!container) return;
   const latest = state.setupStatus?.latest_player_import;
@@ -943,51 +1005,6 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  if (target.id === "import-nfl-stats") {
-    const status = $("#nfl-stats-import-status");
-    const season = $("#nfl-stats-season")?.value;
-    const sourceUrl = $("#nfl-stats-source-url")?.value?.trim();
-    if (!sourceUrl) {
-      toast("Enter a source URL for NFL stats.");
-      return;
-    }
-    target.disabled = true;
-    if (status) status.innerHTML = emptyState("Importing NFL stats...");
-    try {
-      const result = await api("/api/integrations/nfl/stats/import", {
-        method: "POST",
-        body: JSON.stringify({
-          source_url: sourceUrl,
-          season: season ? Number(season) : undefined,
-          source_name: "nflfastR",
-        }),
-      });
-      const failedPreview = (result.failed_rows || [])
-        .slice(0, 5)
-        .map(
-          (row) =>
-            `<div class="compact-row"><span>Row ${escapeHtml(row.row)} · ${escapeHtml(row.player_name || "Unknown")}</span><span>${escapeHtml(row.reason)}</span></div>`,
-        )
-        .join("");
-      if (status) {
-        status.innerHTML = `
-          <div class="compact-row"><span>Imported</span><strong>${escapeHtml(result.imported_count)}</strong></div>
-          <div class="compact-row"><span>Failed</span><strong>${escapeHtml(result.failed_count)}</strong></div>
-          ${failedPreview || ""}`;
-      }
-      toast(`Imported ${result.imported_count} NFL stat rows (${result.failed_count} failed).`);
-      if (state.selectedPlayer?.player?.internal_player_id) {
-        await loadPlayerDetail(state.selectedPlayer.player.internal_player_id);
-      }
-    } catch (error) {
-      if (status) status.innerHTML = emptyState(error.message || "Import failed.");
-      toast(error.message || "NFL stats import failed.");
-    } finally {
-      target.disabled = false;
-    }
-    return;
-  }
-
   if (target.id === "import-sleeper-players") {
     target.disabled = true;
     target.textContent = "Refreshing...";
@@ -1253,7 +1270,36 @@ $("#sleeper-form").addEventListener("submit", async (event) => {
   toast(`Imported ${result.imported.league?.name || "Sleeper league"}.`);
 });
 
-$("#rankings-form").addEventListener("submit", async (event) => {
+
+$("#fantasypros-rankings-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await importRankings("fantasypros", "#fantasypros-rankings-json", "#fantasypros-import-result");
+});
+$("#espn-rankings-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await importRankings("espn", "#espn-rankings-json", "#espn-import-result");
+});
+$("#nflverse-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = $("#nflverse-json").value.trim();
+  const body = text && text !== "[]" ? { rows: parseRows(text, "nflverse") } : { fetch: true, season: Number($("#nflverse-season").value || 2024) };
+  if (!body.rows && !body.fetch) return;
+  const result = await api("/api/integrations/nflverse/stats/import", { method: "POST", body: JSON.stringify(body) });
+  renderImportResult("#nflverse-import-result", result);
+  await refreshSetupStatus();
+  toast(`Imported ${result.imported_count} nflverse stat rows.`);
+});
+$("#nflverse-fetch")?.addEventListener("click", async () => {
+  const limit = $("#nflverse-limit").value.trim();
+  const body = { fetch: true, season: Number($("#nflverse-season").value || 2024) };
+  if (limit) body.limit = Number(limit);
+  const result = await api("/api/integrations/nflverse/stats/import", { method: "POST", body: JSON.stringify(body) });
+  renderImportResult("#nflverse-import-result", result);
+  await refreshSetupStatus();
+  toast(`Fetched and imported ${result.imported_count} nflverse rows.`);
+});
+
+$("#rankings-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const rows = parseRows($("#rankings-json").value, "Rankings");
   if (!rows) return;

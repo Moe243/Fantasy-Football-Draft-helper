@@ -251,6 +251,12 @@
           </div>
 
           <div class="setup-grid">
+            <section class="panel import-center-panel">
+              <h3>Import Center</h3>
+              <p class="helper-copy">Import each source separately, then compare rankings on Players, Player Detail, and the Draft Board.</p>
+              <div id="import-center-status" class="compact-list setup-status"></div>
+            </section>
+
             <section class="panel">
               <h3>League Settings</h3>
               <form id="settings-form" class="stack-form">
@@ -304,75 +310,48 @@
               <p class="helper-copy">Sleeper can import league settings, rosters, users, draft metadata, and picks. Manual keeper entry stays available when keeper slots are not encoded cleanly.</p>
             </section>
 
+            <details id="advanced-import" class="panel">
+              <summary>Advanced JSON Imports</summary>
             <section class="panel">
-              <h3>Rankings JSON</h3>
-              <form id="rankings-form" class="stack-form">
-                <label>
-                  Source name
-                  <input id="rankings-source" value="fantasypros" />
-                </label>
-                <label>
-                  Rows JSON
-                  <textarea id="rankings-json" rows="9" spellcheck="false">[
-  {
-    "player_name": "Ja'Marr Chase",
-    "team": "CIN",
-    "position": "WR",
-    "overall_rank": 2,
-    "position_rank": "WR1",
-    "adp": 2.6,
-    "projected_points": 304.8,
-    "tier": 1,
-    "bye_week": 10
-  }
-]</textarea>
-                </label>
+              <h3>FantasyPros Rankings (JSON)</h3>
+              <form id="fantasypros-rankings-form" class="stack-form">
+                <label>Rows JSON <textarea id="fantasypros-rankings-json" rows="8" spellcheck="false">[{"player_name":"Ja'Marr Chase","team":"CIN","position":"WR","overall_rank":2,"adp":2.6,"projected_points":304.8}]</textarea></label>
+                <button type="submit" class="primary-button">Import FantasyPros Rankings</button>
+              </form>
+              <div id="fantasypros-import-result" class="compact-list"></div>
+            </section>
+            <section class="panel">
+              <h3>ESPN Rankings (JSON)</h3>
+              <form id="espn-rankings-form" class="stack-form">
+                <label>Rows JSON <textarea id="espn-rankings-json" rows="8" spellcheck="false">[{"player_name":"Ja'Marr Chase","team":"CIN","position":"WR","overall_rank":2,"adp":2.6}]</textarea></label>
+                <button type="submit" class="primary-button">Import ESPN Rankings</button>
+              </form>
+              <div id="espn-import-result" class="compact-list"></div>
+            </section>
+            <section class="panel">
+              <h3>nflverse Stats</h3>
+              <form id="nflverse-form" class="stack-form">
+                <label>Rows JSON <textarea id="nflverse-json" rows="7" spellcheck="false">[{"player_name":"Ja'Marr Chase","team":"CIN","position":"WR","season":2024,"week":1,"fantasy_points":25,"sleeper_id":"111"}]</textarea></label>
+                <div class="form-row">
+                  <label>Season <input id="nflverse-season" type="number" value="2024" /></label>
+                  <label>Limit <input id="nflverse-limit" type="number" placeholder="Optional" /></label>
+                </div>
                 <div class="button-row">
-                  <button type="submit" class="primary-button">Import Rankings JSON</button>
-                  <button type="button" class="ghost-button" id="refresh-consensus">Refresh Consensus</button>
+                  <button type="submit" class="primary-button">Import nflverse JSON</button>
+                  <button type="button" class="ghost-button" id="nflverse-fetch">Fetch nflverse CSV</button>
                 </div>
               </form>
+              <div id="nflverse-import-result" class="compact-list"></div>
             </section>
-
             <section class="panel">
-              <h3>NFL Stats Import</h3>
-              <p class="helper-copy">Import weekly actual or projected stats from a public JSON/CSV URL (nflfastR-style columns supported).</p>
-              <div class="stack-form">
-                <label>
-                  Season
-                  <input id="nfl-stats-season" type="number" min="2000" max="2100" placeholder="2025" />
-                </label>
-                <label>
-                  Source URL
-                  <input id="nfl-stats-source-url" type="url" placeholder="https://... or sample_data/nfl_stats_sample.json" />
-                </label>
-                <button type="button" class="primary-button" id="import-nfl-stats">Import NFL Stats</button>
-                <div id="nfl-stats-import-status" class="compact-list setup-status"></div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <h3>Stats JSON</h3>
+              <h3>Other Stats JSON</h3>
               <form id="stats-form" class="stack-form">
-                <label>Source name <input id="stats-source" value="espn" /></label>
-                <label>Rows JSON <textarea id="stats-json" rows="7" spellcheck="false">[
-  {
-    "player_name": "Ja'Marr Chase",
-    "team": "CIN",
-    "position": "WR",
-    "season": 2025,
-    "week": 1,
-    "stat_type": "actual",
-    "targets": 12,
-    "receptions": 8,
-    "receiving_yards": 110,
-    "receiving_tds": 1,
-    "fantasy_points": 25
-  }
-]</textarea></label>
+                <label>Source name <input id="stats-source" value="manual" /></label>
+                <label>Rows JSON <textarea id="stats-json" rows="4" spellcheck="false">[]</textarea></label>
                 <button type="submit" class="primary-button">Import Stats JSON</button>
               </form>
             </section>
+            </details>
 
             <section class="panel">
               <h3>Props JSON</h3>

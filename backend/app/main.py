@@ -20,8 +20,8 @@ from .providers.sleeper import SleeperClient
 from .sample_data import SAMPLE_PLAYERS, players_by_id
 from .services.availability import estimate_availability
 from .services.consensus import get_consensus_for_player, get_consensus_rows
-from .providers.nfl_data import NFLStatsProvider
-from .services.data_imports import import_nfl_public_stat_rows, import_prop_rows, import_stat_rows
+from .services.data_imports import import_nflverse_stat_rows, import_prop_rows, import_stat_rows
+from .services.import_center import get_import_center_status
 from .services.draft_board import get_draft_board
 from .services.draft_history import draft_history_summary
 from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
@@ -105,7 +105,12 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 "players_loaded": db.count_players_by_source(conn, "sleeper"),
                 "latest_player_import": dict(latest_players) if latest_players else None,
                 "league": league_status(conn, league_id) if league_id else None,
+                "import_center": get_import_center_status(conn, league_id),
             }
+
+        if method == "GET" and path == "/api/setup/import-center":
+            league_id = first(query, "league_id")
+            return get_import_center_status(conn, league_id)
 
         if method == "GET" and path == "/api/architecture":
             return {
@@ -348,29 +353,25 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 raise ValueError("rows must be a list")
             return import_stat_rows(conn, require(payload, "source_name"), rows)
 
+        if method == "POST" and path == "/api/integrations/nflverse/stats/import":
+            payload = self.read_json()
+            rows = payload.get("rows")
+            if rows is None and payload.get("fetch"):
+                from .providers.nflverse import fetch_stats_player_rows
+
+                season = int(payload.get("season") or 2024)
+                limit = optional_query_int(str(payload.get("limit"))) if payload.get("limit") else None
+                rows = fetch_stats_player_rows(season, limit=limit)
+            if not isinstance(rows, list):
+                raise ValueError("rows must be a list or set fetch=true with season")
+            return import_nflverse_stat_rows(conn, rows)
+
         if method == "POST" and path == "/api/player-props/import/json":
             payload = self.read_json()
             rows = payload.get("rows")
             if not isinstance(rows, list):
                 raise ValueError("rows must be a list")
             return import_prop_rows(conn, require(payload, "source_name"), payload.get("sportsbook"), rows)
-
-
-        if method == "POST" and path == "/api/integrations/nfl/stats/import":
-            payload = self.read_json()
-            source_name = str(payload.get("source_name") or "nflfastR")
-            season = payload.get("season")
-            provider = NFLStatsProvider(
-                source_url=payload.get("source_url"),
-                season=season,
-            )
-            rows = provider.fetch_rows()
-            return import_nfl_public_stat_rows(
-                conn,
-                source_name,
-                rows,
-                default_season=optional_int(season) if season is not None else None,
-            )
 
         if method == "POST" and path == "/api/practice/start":
             payload = self.read_json()

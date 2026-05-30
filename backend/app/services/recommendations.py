@@ -12,6 +12,7 @@ from ..models import DraftPick, Keeper, LeagueSettings, Player, Recommendation
 from ..sample_data import SAMPLE_PLAYERS, players_by_id
 from .consensus import get_consensus_rows
 from .normalization import normalize_name, normalize_position
+from .source_comparison import attach_source_comparison
 
 
 FANTASY_POSITIONS = ("QB", "RB", "WR", "TE", "DEF", "K")
@@ -42,10 +43,7 @@ def available_players(
 
 def current_pick_number(picks: list[DraftPick], keepers: list[Keeper]) -> int:
     selected = [pick.pick_no for pick in picks]
-    for keeper in keepers:
-        pick_no = keeper.pick_no if hasattr(keeper, "pick_no") else keeper.get("pick_no")
-        if pick_no:
-            selected.append(int(pick_no))
+    selected.extend(keeper.pick_no for keeper in keepers if keeper.pick_no)
     return max(selected, default=0) + 1
 
 
@@ -169,35 +167,23 @@ def database_draft_recommendations(
     settings: LeagueSettings,
     keepers: list[Keeper],
     picks: list[DraftPick],
-    limit: int = 30,
+    limit: int = 12,
     manager: str = "me",
     position: str | None = None,
     search: str | None = None,
     hide_drafted: bool = True,
     hide_keepers: bool = True,
     current_pick_override: int | None = None,
-    league_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    from .draft_ranking_engine import score_draft_candidate
-    from .player_detail import compact_recommendation_profile
-
     current_pick = current_pick_override or current_pick_number(picks, keepers)
-    filter_position = None if not position or position.upper() == "ALL" else position
     consensus_rows = get_consensus_rows(
         conn,
-        position=filter_position,
-        limit=800,
+        position=position,
+        limit=600,
         current_pick=current_pick,
     )
     drafted_ids = {pick.player_id for pick in picks}
-    keeper_ids = set()
-    for keeper in keepers:
-        if isinstance(keeper, dict):
-            player = keeper.get("player_id") or (keeper.get("player") or {}).get("internal_player_id")
-            if player:
-                keeper_ids.add(player)
-        else:
-            keeper_ids.add(keeper.player_id)
+    keeper_ids = {keeper.player_id for keeper in keepers}
     normalized_search = normalize_name(search or "")
     filtered: list[dict[str, Any]] = []
     for row in consensus_rows:
@@ -212,33 +198,10 @@ def database_draft_recommendations(
 
     counts = database_roster_counts(conn, picks, manager=manager)
     desired = desired_position_counts(settings)
-    teams = int(settings.teams or 10)
-    from .draft_ranking_engine import score_draft_candidate
-    from .player_detail import compact_recommendation_profile
-
-    scored: list[dict[str, Any]] = []
-    for item in filtered:
-        ranked = score_draft_candidate(
-            conn,
-            item,
-            league_id=league_id,
-            desired=desired,
-            counts=counts,
-            current_pick=current_pick,
-            teams=teams,
-        )
-        player = ranked["player"]
-        profile = compact_recommendation_profile(
-            conn,
-            player["internal_player_id"],
-            player,
-            ranked.get("signals"),
-        )
-        ranked["history"] = profile["history"]
-        ranked["props_2026"] = profile["props_2026"]
-        ranked["outlook"] = profile["outlook"]
-        ranked["market_signal"] = profile["market_signal"]
-        scored.append(ranked)
+    scored = [
+        score_database_player(item, desired, counts, current_pick)
+        for item in filtered
+    ]
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]
 
 
@@ -294,9 +257,9 @@ def score_database_player(
     )
     item = dict(item)
     item["score"] = round(score, 2)
-    item["fit"] = fit_label(score)
+    item["fit"] = consensus.get("label") or fit_label(score)
     item["reasons"] = reasons
-    return item
+    return attach_source_comparison(item, current_pick)
 
 
 def database_reasons(
