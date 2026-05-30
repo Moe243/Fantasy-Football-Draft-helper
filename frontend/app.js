@@ -119,6 +119,7 @@ function renderRecommendations() {
               <span class="tag position">${escapeHtml(player.position || "UNK")} · ${escapeHtml(player.team || "")}</span>
               <span class="tag fit">${escapeHtml(item.fit)}</span>
               ${risk}
+              ${bestAvailableConsensusLine(item)}
             </div>
             ${renderConsensusGrid(item)}
             <ul class="reason-list">
@@ -309,137 +310,14 @@ function draftCell(pick) {
   const practice = pick.practice_source ? `<span class="tag position">${escapeHtml(pick.practice_source)}</span>` : "";
   const traded = pick.is_traded ? `<span class="tag traded-tag">Traded</span>` : "";
   const current = pick.is_current_pick ? `<span class="tag current-tag">${pick.is_mine ? "My pick" : "Current"}</span>` : "";
-  const remove = player && !pick.is_keeper ? `<button type="button" class="text-button remove-pick-button" data-remove-board-pick="${escapeHtml(pick.pick_no)}">Remove</button>` : "";
-  const playerId = player ? (player.internal_player_id || player.id || "") : "";
+  const remove = player && !pick.is_keeper ? `<button class="text-button remove-pick-button" data-remove-board-pick="${escapeHtml(pick.pick_no)}">Remove</button>` : "";
   return `
-    <div
-      class="${classes.join(" ")} board-pick-cell"
-      data-board-pick-cell
-      data-board-pick-no="${escapeHtml(pick.pick_no)}"
-      data-board-round="${escapeHtml(pick.round)}"
-      data-board-draft-slot="${escapeHtml(pick.draft_slot)}"
-      data-board-manager="${escapeHtml(pick.manager_name || "")}"
-      ${playerId ? `data-board-player-id="${escapeHtml(playerId)}"` : ""}
-      ${pick.is_keeper ? 'data-board-is-keeper="1"' : ""}
-      role="button"
-      tabindex="0"
-      aria-label="Edit pick ${escapeHtml(pick.pick_no)}"
-    >
+    <div class="${classes.join(" ")}">
       <span class="pick-meta">Pick ${escapeHtml(pick.pick_no)} · Slot ${escapeHtml(pick.draft_slot)}</span>
       ${playerLabel}
       <div class="pick-tags">${current}${keeper}${traded}${practice}${remove}</div>
     </div>
   `;
-}
-
-function openBoardPickModal(pick) {
-  state.selectedBoardPick = pick;
-  const modal = $("#draft-pick-modal");
-  if (!modal) return;
-  $("#board-pick-modal-title").textContent = pick.playerId ? "Edit Pick" : "Assign Pick";
-  $("#board-pick-modal-meta").textContent = `Pick ${pick.pickNo} · Round ${pick.round} · Slot ${pick.draftSlot} · ${pick.manager || "Open"}`;
-  const currentEl = $("#board-pick-current-player");
-  if (pick.playerId) {
-    const player = state.players.find((item) => (item.id || item.internal_player_id) === pick.playerId);
-    const name = player?.full_name || player?.name || "Current player";
-    currentEl.textContent = `Current: ${name}`;
-    currentEl.hidden = false;
-  } else {
-    currentEl.textContent = "";
-    currentEl.hidden = true;
-  }
-  const input = $("#board-pick-player");
-  if (input) {
-    const player = pick.playerId ? state.players.find((item) => (item.id || item.internal_player_id) === pick.playerId) : null;
-    input.value = player ? (player.full_name || player.name || "") : "";
-  }
-  const removeBtn = $("#remove-board-pick");
-  if (removeBtn) {
-    removeBtn.hidden = !pick.playerId || Boolean(pick.isKeeper);
-  }
-  const suggestions = $("#board-pick-suggestions");
-  if (suggestions) {
-    suggestions.innerHTML = boardPickSuggestionsHtml();
-  }
-  modal.classList.remove("hidden");
-  modal.setAttribute("aria-hidden", "false");
-  input?.focus();
-}
-
-function closeBoardPickModal() {
-  state.selectedBoardPick = null;
-  const modal = $("#draft-pick-modal");
-  if (!modal) return;
-  modal.classList.add("hidden");
-  modal.setAttribute("aria-hidden", "true");
-  const input = $("#board-pick-player");
-  if (input) input.value = "";
-}
-
-function boardPickSuggestionsHtml() {
-  const order = ["QB", "RB", "WR", "TE", "DEF", "K"];
-  const byPosition = {};
-  for (const item of state.recommendations || state.bestAvailable || []) {
-    const position = item.player?.position || "UNK";
-    if (!byPosition[position]) byPosition[position] = [];
-    if (byPosition[position].length < 6) byPosition[position].push(item);
-  }
-  const groups = order.filter((position) => byPosition[position]?.length);
-  if (!groups.length) {
-    return emptyState("Import players and refresh the board to see ranked suggestions.");
-  }
-  return groups
-    .map((position) => {
-      const rows = byPosition[position]
-        .map((item) => {
-          const player = item.player;
-          const name = player?.full_name || player?.name || "Player";
-          const rank = item.consensus?.consensus_rank ?? player?.search_rank ?? player?.rank;
-          const adp = item.consensus?.sleeper_adp ?? player?.adp;
-          const rankText = rank != null ? `Rank ${formatMetric(rank)}` : "No rank";
-          const adpText = adp != null ? `ADP ${formatMetric(adp)}` : "";
-          return `<button type="button" class="board-suggest-player" data-suggest-name="${escapeHtml(name)}">${escapeHtml(name)} · ${escapeHtml(rankText)}${adpText ? ` · ${escapeHtml(adpText)}` : ""}</button>`;
-        })
-        .join("");
-      return `<div class="board-suggest-group"><strong>${escapeHtml(position)}</strong>${rows}</div>`;
-    })
-    .join("");
-}
-
-async function saveBoardPick() {
-  const pick = state.selectedBoardPick;
-  const leagueId = requireLeagueId();
-  if (!pick || !leagueId) return;
-  const player = findPlayerByName($("#board-pick-player")?.value || "");
-  if (!player) {
-    toast("Choose a player from the list.");
-    return;
-  }
-  const result = await api("/api/draft/pick", {
-    method: "POST",
-    body: JSON.stringify({
-      league_id: leagueId,
-      practice_draft_id: state.practiceStatus?.practice?.id || null,
-      player_id: player.id || player.internal_player_id,
-      pick_no: Number(pick.pickNo),
-    }),
-  });
-  await applyDraftState(result);
-  closeBoardPickModal();
-  const playerName = player.full_name || player.name || "Player";
-  toast(`Added ${playerName} to pick ${pick.pickNo}.`);
-}
-
-async function removeBoardPickFromModal() {
-  const pick = state.selectedBoardPick;
-  const leagueId = requireLeagueId();
-  if (!pick || !leagueId || !pick.playerId) return;
-  const result = await api(`/api/draft/pick?league_id=${encodeURIComponent(leagueId)}&pick_no=${encodeURIComponent(pick.pickNo)}`, {
-    method: "DELETE",
-  });
-  await applyDraftState(result);
-  closeBoardPickModal();
-  toast(`Removed pick ${pick.pickNo}.`);
 }
 
 function renderMyUpcomingPicks() {
@@ -830,10 +708,10 @@ async function refreshDraftState() {
   const query = new URLSearchParams(draftStateQueryParams());
   query.set("league_id", state.leagueId);
   const payload = await api(`/api/draft/state?${query.toString()}`);
-  await applyDraftState(payload);
+  applyDraftState(payload);
 }
 
-async function applyDraftState(payload) {
+function applyDraftState(payload) {
   state.draftState = payload;
   state.draftBoard = payload;
   state.draftMapping = payload.draft_mapping || payload.draft_order || state.draftMapping || [];
@@ -1120,7 +998,7 @@ document.addEventListener("click", async (event) => {
       body: JSON.stringify({ league_id: leagueId, slots }),
     });
     state.draftMapping = result.draft_mapping || [];
-    if (result.draft_state) await applyDraftState(result.draft_state);
+    if (result.draft_state) applyDraftState(result.draft_state);
     await Promise.all([refreshLeagueManagers(), refreshSetupStatus()]);
     toast("Draft order saved and board rebuilt.");
     return;
@@ -1191,40 +1069,13 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-
-  const suggestName = target.dataset.suggestName;
-  if (suggestName) {
-    const input = $("#board-pick-player");
-    if (input) input.value = suggestName;
-    return;
-  }
-
-  if (target.dataset.closeBoardPick !== undefined || target.id === "cancel-board-pick") {
-    closeBoardPickModal();
-    return;
-  }
-
-  const boardCell = target.closest("[data-board-pick-cell]");
-  if (boardCell && !target.closest(".remove-pick-button")) {
-    if (!requireLeagueId()) return;
-    openBoardPickModal({
-      pickNo: boardCell.dataset.boardPickNo,
-      round: boardCell.dataset.boardRound,
-      draftSlot: boardCell.dataset.boardDraftSlot,
-      manager: boardCell.dataset.boardManager,
-      playerId: boardCell.dataset.boardPlayerId || null,
-      isKeeper: boardCell.dataset.boardIsKeeper === "1",
-    });
-    return;
-  }
-
   if (target.dataset.removeBoardPick) {
     const leagueId = requireLeagueId();
     if (!leagueId) return;
     const result = await api(`/api/draft/pick?league_id=${encodeURIComponent(leagueId)}&pick_no=${encodeURIComponent(target.dataset.removeBoardPick)}`, {
       method: "DELETE",
     });
-    await applyDraftState(result);
+    applyDraftState(result);
     toast(`Removed pick ${target.dataset.removeBoardPick}.`);
     return;
   }
@@ -1242,7 +1093,7 @@ document.addEventListener("click", async (event) => {
         pick_no: null,
       }),
     });
-    await applyDraftState(result);
+    applyDraftState(result);
     const pick = result.last_pick;
     const playerName = pick?.player?.full_name || pick?.player?.name || "Player";
     toast(`Drafted ${playerName} at pick ${pick?.pick_no || state.currentPick}.`);
@@ -1314,7 +1165,7 @@ $("#pick-form").addEventListener("submit", async (event) => {
         pick_no: $("#pick-number").value || null,
       }),
     });
-    await applyDraftState(result);
+    applyDraftState(result);
   } else {
     await api("/api/draft/picks", {
       method: "POST",
@@ -1444,14 +1295,6 @@ $("#chat-form").addEventListener("submit", async (event) => {
     addMessage("assistant", error.message);
   }
 });
-
-
-$("#save-board-pick")?.addEventListener("click", () => saveBoardPick());
-$("#remove-board-pick")?.addEventListener("click", () => removeBoardPickFromModal());
-document.querySelectorAll("[data-close-board-pick], #cancel-board-pick").forEach((node) => {
-  node.addEventListener("click", closeBoardPickModal);
-});
-
 
 loadAll().then(() => {
   addMessage("assistant", "Ready. Ask me about the draft board, waiver risers, keepers, weekly matchups, or any player profile.");
