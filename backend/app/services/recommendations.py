@@ -12,7 +12,6 @@ from ..models import DraftPick, Keeper, LeagueSettings, Player, Recommendation
 from ..sample_data import SAMPLE_PLAYERS, players_by_id
 from .consensus import get_consensus_rows
 from .normalization import normalize_name, normalize_position
-from .source_comparison import attach_source_comparison
 
 
 FANTASY_POSITIONS = ("QB", "RB", "WR", "TE", "DEF", "K")
@@ -162,6 +161,61 @@ def draft_recommendations(
     return sorted(recommendations, key=lambda rec: rec.score, reverse=True)[:limit]
 
 
+def recommendation_api_rows(
+    conn: sqlite3.Connection,
+    settings: LeagueSettings,
+    keepers: list[Keeper],
+    picks: list[DraftPick],
+    position: str | None = "ALL",
+    limit: int = 5,
+    current_pick: int = 1,
+) -> list[dict[str, Any]]:
+    """Flatten database recommendations for GET /api/recommendations."""
+    position_key = str(position or "ALL").strip().upper()
+    position_filter = None
+    if position_key not in {"", "ALL"}:
+        position_filter = "K" if position_key == "K" else position_key
+    recs = database_draft_recommendations(
+        conn,
+        settings,
+        keepers,
+        picks,
+        limit=limit,
+        manager="draft_panel",
+        position=position_filter,
+        hide_drafted=True,
+        hide_keepers=True,
+        current_pick_override=current_pick,
+    )
+    rows: list[dict[str, Any]] = []
+    for item in recs:
+        player = item.get("player") or {}
+        consensus = item.get("consensus") or {}
+        source_adps = [
+            source.get("adp")
+            for source in (item.get("sources") or {}).values()
+            if source.get("adp") is not None
+        ]
+        sleeper_adp = consensus.get("sleeper_adp")
+        if sleeper_adp is None and source_adps:
+            sleeper_adp = sum(float(value) for value in source_adps) / len(source_adps)
+        rows.append(
+            {
+                "player_id": player.get("internal_player_id") or player.get("id"),
+                "player_name": player.get("full_name") or player.get("name"),
+                "team": player.get("team"),
+                "position": player.get("position"),
+                "consensus_rank": consensus.get("consensus_rank"),
+                "adp": sleeper_adp,
+                "label": consensus.get("label") or item.get("fit"),
+                "source_count": consensus.get("source_count"),
+                "projected_points": consensus.get("projected_points_avg"),
+                "score": item.get("score"),
+            }
+        )
+    return rows
+
+
 def database_draft_recommendations(
     conn: sqlite3.Connection,
     settings: LeagueSettings,
@@ -257,9 +311,9 @@ def score_database_player(
     )
     item = dict(item)
     item["score"] = round(score, 2)
-    item["fit"] = consensus.get("label") or fit_label(score)
+    item["fit"] = fit_label(score)
     item["reasons"] = reasons
-    return attach_source_comparison(item, current_pick)
+    return item
 
 
 def database_reasons(

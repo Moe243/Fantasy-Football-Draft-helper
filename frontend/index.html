@@ -66,6 +66,32 @@
             <div id="league-draft-board" class="draft-board-grid"></div>
           </section>
 
+          <div id="draft-team-modal" class="draft-team-modal" hidden>
+            <div class="draft-team-modal-backdrop" data-close-draft-team-modal></div>
+            <section class="panel draft-team-modal-panel" role="dialog" aria-modal="true" aria-labelledby="draft-team-modal-title">
+              <div class="panel-head">
+                <div>
+                  <h3 id="draft-team-modal-title">Draft Pick</h3>
+                  <p id="draft-team-modal-subtitle"></p>
+                </div>
+                <button type="button" class="ghost-button" id="draft-team-modal-close" data-close-draft-team-modal>Close</button>
+              </div>
+              <div id="draft-team-modal-error" class="draft-team-modal-error" hidden></div>
+              <div class="draft-team-tabs" role="tablist" aria-label="Position filter">
+                <button type="button" class="ghost-button draft-team-tab active" data-draft-team-tab="ALL">ALL</button>
+                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="QB">QB</button>
+                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="RB">RB</button>
+                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="WR">WR</button>
+                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="TE">TE</button>
+                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="DEF">DEF</button>
+                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="K">K</button>
+              </div>
+              <div id="draft-team-modal-body" class="draft-team-modal-body">
+                <div class="compact-row"><span>Loading recommendations…</span></div>
+              </div>
+            </section>
+          </div>
+
           <section class="panel my-picks-panel">
             <div class="panel-head">
               <div>
@@ -305,20 +331,12 @@
             </section>
 
             <section class="panel">
-              <h3>FantasyPros CSV Import</h3>
-              <p class="helper-copy">Upload a FantasyPros rankings or projections CSV file.</p>
-              <div class="stack-form">
-                <label for="fp-csv-file">CSV file</label>
-                <input type="file" id="fp-csv-file" accept=".csv" />
-                <button type="button" class="primary-button" id="fp-csv-import-btn">Import CSV</button>
-                <div id="fp-csv-import-status" class="compact-list setup-status"></div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <h3>Manual Rankings Import</h3>
-              <p class="helper-copy">Optional advanced import for rankings/projections. Most users do not need this.</p>
+              <h3>Rankings JSON</h3>
               <form id="rankings-form" class="stack-form">
+                <label>
+                  Source name
+                  <input id="rankings-source" value="fantasypros" />
+                </label>
                 <label>
                   Rows JSON
                   <textarea id="rankings-json" rows="9" spellcheck="false">[
