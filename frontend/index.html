@@ -400,7 +400,7 @@
                   </label>
                   <label>
                     Round
-                    <input id="keeper-round" type="number" min="1" placeholder="Optional" />
+                    <input id="keeper-round" type="number" min="1" value="15" placeholder="15" />
                   </label>
                   <label>
                     Pick
@@ -418,28 +418,6 @@
 
     <datalist id="player-options"></datalist>
     <div id="toast" role="status" aria-live="polite"></div>
-
-    <div id="draft-pick-panel" class="draft-pick-panel hidden">
-      <div class="draft-pick-panel-header">
-        <div>
-          <h2 id="draft-panel-title">Draft Pick</h2>
-          <span id="draft-panel-subtitle"></span>
-        </div>
-        <button id="draft-panel-close" class="text-button">✕ Close</button>
-      </div>
-      <div class="position-tabs">
-        <button class="pos-tab active" data-pos="ALL">ALL</button>
-        <button class="pos-tab" data-pos="QB">QB</button>
-        <button class="pos-tab" data-pos="RB">RB</button>
-        <button class="pos-tab" data-pos="WR">WR</button>
-        <button class="pos-tab" data-pos="TE">TE</button>
-        <button class="pos-tab" data-pos="DEF">DEF</button>
-        <button class="pos-tab" data-pos="K">K</button>
-      </div>
-      <div id="draft-panel-players" class="draft-panel-players"></div>
-    </div>
-    <div id="draft-panel-overlay" class="draft-panel-overlay hidden"></div>
-
     <script src="/app.js" defer></script>
   </body>
 </html>
