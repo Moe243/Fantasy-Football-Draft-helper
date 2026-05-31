@@ -1215,7 +1215,7 @@ $("#rankings-form").addEventListener("submit", async (event) => {
   const result = await api("/api/rankings/import/csv", {
     method: "POST",
     body: JSON.stringify({
-      source_name: $("#rankings-source").value,
+      source_name: "manual_rankings",
       rows,
     }),
   });
@@ -1224,6 +1224,43 @@ $("#rankings-form").addEventListener("submit", async (event) => {
   await refreshDraft();
   toast(`Imported ${result.imported_count} ${result.source_name} rankings.`);
 });
+
+if ($("#fp-csv-import-btn")) {
+  $("#fp-csv-import-btn").addEventListener("click", async () => {
+    const fileInput = $("#fp-csv-file");
+    const status = $("#fp-csv-import-status");
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      const message = "Choose a FantasyPros CSV file first.";
+      if (status) status.innerHTML = `<div>${escapeHtml(message)}</div>`;
+      toast(message);
+      return;
+    }
+    if (status) status.innerHTML = `<div>Importing ${escapeHtml(file.name)}…</div>`;
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+    try {
+      const response = await fetch("/api/rankings/import/fantasypros-csv", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error || "FantasyPros CSV import failed");
+      }
+      const message = `Imported ${payload.imported} rankings (${payload.source_name}).`;
+      if (status) status.innerHTML = `<div>${escapeHtml(message)}</div>`;
+      await Promise.all([refreshPlayers(), refreshPlayersSearch(), refreshDraft()]);
+      toast(message);
+    } catch (error) {
+      const message = `Import failed: ${error.message}`;
+      if (status) status.innerHTML = `<div>${escapeHtml(message)}</div>`;
+      toast(message);
+    } finally {
+      if (fileInput) fileInput.value = "";
+    }
+  });
+}
 
 $("#stats-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1274,547 +1311,6 @@ $("#draft-search-filter").addEventListener("input", debounce(async () => {
   $(`#${id}`).addEventListener("change", refreshPlayersSearch);
 });
 
-function stripCsvQuotes(value) {
-  const text = String(value ?? "").trim();
-  if (text.startsWith('"') && text.endsWith('"')) {
-    return text.slice(1, -1).replace(/""/g, '"');
-  }
-  return text;
-}
-
-function parseCsvLine(line) {
-  const fields = [];
-  let current = "";
-  let inQuotes = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (char === '"') {
-      if (inQuotes && line[index + 1] === '"') {
-        current += '"';
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      fields.push(stripCsvQuotes(current));
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  fields.push(stripCsvQuotes(current));
-  return fields;
-}
-
-function splitFantasyProsPosition(posValue) {
-  const positionRank = String(posValue || "").trim().toUpperCase();
-  if (!positionRank) {
-    return { position: "", position_rank: "" };
-  }
-  if (positionRank === "DST" || positionRank.startsWith("DST")) {
-    return { position: "DEF", position_rank: positionRank };
-  }
-  const letters = positionRank.match(/^[A-Z]+/);
-  return {
-    position: letters ? letters[0] : positionRank,
-    position_rank: positionRank,
-  };
-}
-
-function parseOptionalInt(value) {
-  const text = String(value ?? "").trim();
-  if (!text || text === "-") return null;
-  const parsed = Number.parseInt(text, 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseOptionalFloat(value) {
-  const text = String(value ?? "").trim();
-  if (!text || text === "-") return null;
-  const parsed = Number.parseFloat(text);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function mapFantasyProsCsvRow(headerIndex, values) {
-  const get = (name) => {
-    const index = headerIndex[name];
-    return index === undefined ? "" : values[index];
-  };
-  const playerName = String(get("PLAYER NAME") || "").trim();
-  if (!playerName) {
-    return null;
-  }
-  const { position, position_rank } = splitFantasyProsPosition(get("POS"));
-  return {
-    player_name: playerName,
-    team: String(get("TEAM") || "").trim(),
-    position,
-    position_rank,
-    overall_rank: parseOptionalInt(get("RK")),
-    tier: parseOptionalInt(get("TIERS")),
-    bye_week: parseOptionalInt(get("BYE WEEK")),
-    ecr_vs_adp: parseOptionalFloat(get("ECR VS. ADP")),
-  };
-}
-
-const UNIVERSAL_RANKING_KEYS = [
-  "overall_rank",
-  "rank",
-  "rk",
-  "adp",
-  "tier",
-  "tiers",
-  "position_rank",
-  "projected_points",
-  "ecr_vs_adp",
-  "bye_week",
-];
-const UNIVERSAL_STAT_KEYS = [
-  "season",
-  "week",
-  "stat_type",
-  "fantasy_points",
-  "passing_yards",
-  "receiving_yards",
-  "rushing_yards",
-  "targets",
-  "receptions",
-  "passing_tds",
-  "rushing_tds",
-  "receiving_tds",
-];
-const UNIVERSAL_PROP_KEYS = ["market", "line", "over_odds", "under_odds", "sportsbook", "implied_probability"];
-
-function detectUniversalFileFormat(file, text) {
-  const name = String(file?.name || "").toLowerCase();
-  if (name.endsWith(".json")) return "json";
-  if (name.endsWith(".csv")) return "csv";
-  const trimmed = String(text || "").trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return "json";
-  return "csv";
-}
-
-function detectCsvDelimiter(firstLine) {
-  const commas = (firstLine.match(/,/g) || []).length;
-  const tabs = (firstLine.match(/\t/g) || []).length;
-  return tabs > commas ? "\t" : ",";
-}
-
-function parseDelimitedLine(line, delimiter) {
-  if (delimiter === ",") {
-    return parseCsvLine(line);
-  }
-  return line.split("\t").map((value) => stripCsvQuotes(value));
-}
-
-function parseDelimitedDocument(text) {
-  const lines = String(text || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  if (!lines.length) {
-    throw new Error("File is empty");
-  }
-  const delimiter = detectCsvDelimiter(lines[0]);
-  const headers = parseDelimitedLine(lines[0], delimiter).map((header) => normalizeUniversalHeader(header));
-  const rows = lines.slice(1).map((line) => parseDelimitedLine(line, delimiter));
-  return { headers, rows, delimiter };
-}
-
-function normalizeUniversalHeader(header) {
-  return String(header || "")
-    .trim()
-    .replace(/\ufeff/g, "")
-    .replace(/\s+/g, " ")
-    .toUpperCase();
-}
-
-function buildHeaderIndex(headers) {
-  const index = {};
-  headers.forEach((header, position) => {
-    index[header] = position;
-    index[header.replace(/\./g, "")] = position;
-  });
-  return index;
-}
-
-function isFantasyProsCsv(headers) {
-  const normalized = new Set(headers.map((header) => normalizeUniversalHeader(header)));
-  return normalized.has("PLAYER NAME") && normalized.has("RK") && normalized.has("POS");
-}
-
-function headerGet(headerIndex, values, ...names) {
-  for (const name of names) {
-    const key = normalizeUniversalHeader(name);
-    if (headerIndex[key] !== undefined) {
-      return values[headerIndex[key]];
-    }
-  }
-  return "";
-}
-
-function mapGenericCsvRankingsRow(headerIndex, values) {
-  const playerName = String(
-    headerGet(headerIndex, values, "PLAYER NAME", "PLAYER", "NAME", "FULL NAME") || "",
-  ).trim();
-  if (!playerName) {
-    return null;
-  }
-  const posRaw = String(headerGet(headerIndex, values, "POS", "POSITION") || "").trim();
-  const { position, position_rank } = posRaw.match(/^[A-Z]+\d+$/i)
-    ? splitFantasyProsPosition(posRaw)
-    : { position: posRaw, position_rank: "" };
-  return {
-    player_name: playerName,
-    team: String(headerGet(headerIndex, values, "TEAM") || "").trim(),
-    position,
-    position_rank: position_rank || undefined,
-    overall_rank: parseOptionalInt(headerGet(headerIndex, values, "RK", "RANK", "OVERALL RANK", "OVERALL")),
-    tier: parseOptionalInt(headerGet(headerIndex, values, "TIERS", "TIER")),
-    bye_week: parseOptionalInt(headerGet(headerIndex, values, "BYE WEEK", "BYE")),
-    adp: parseOptionalFloat(headerGet(headerIndex, values, "ADP", "AVG ADP")),
-    projected_points: parseOptionalFloat(
-      headerGet(headerIndex, values, "PROJECTED POINTS", "FPTS", "POINTS", "PROJ"),
-    ),
-    ecr_vs_adp: parseOptionalFloat(headerGet(headerIndex, values, "ECR VS. ADP", "ECR VS ADP")),
-  };
-}
-
-function mapGenericCsvStatsRow(headerIndex, values) {
-  const playerName = String(
-    headerGet(headerIndex, values, "PLAYER NAME", "PLAYER", "NAME", "FULL NAME") || "",
-  ).trim();
-  if (!playerName) {
-    return null;
-  }
-  return {
-    player_name: playerName,
-    team: String(headerGet(headerIndex, values, "TEAM") || "").trim(),
-    position: String(headerGet(headerIndex, values, "POS", "POSITION") || "").trim(),
-    season: parseOptionalInt(headerGet(headerIndex, values, "SEASON", "YEAR")),
-    week: parseOptionalInt(headerGet(headerIndex, values, "WEEK", "WK")),
-    stat_type: String(headerGet(headerIndex, values, "STAT TYPE", "TYPE") || "actual").trim() || "actual",
-    fantasy_points: parseOptionalFloat(
-      headerGet(headerIndex, values, "FANTASY POINTS", "FPTS", "POINTS", "FP"),
-    ),
-    passing_yards: parseOptionalFloat(headerGet(headerIndex, values, "PASSING YARDS", "PASS YDS")),
-    rushing_yards: parseOptionalFloat(headerGet(headerIndex, values, "RUSHING YARDS", "RUSH YDS")),
-    receiving_yards: parseOptionalFloat(headerGet(headerIndex, values, "RECEIVING YARDS", "REC YDS")),
-    targets: parseOptionalFloat(headerGet(headerIndex, values, "TARGETS", "TGT")),
-    receptions: parseOptionalFloat(headerGet(headerIndex, values, "RECEPTIONS", "REC")),
-    passing_tds: parseOptionalFloat(headerGet(headerIndex, values, "PASSING TDS", "PASS TD")),
-    rushing_tds: parseOptionalFloat(headerGet(headerIndex, values, "RUSHING TDS", "RUSH TD")),
-    receiving_tds: parseOptionalFloat(headerGet(headerIndex, values, "RECEIVING TDS", "REC TD")),
-  };
-}
-
-function mapGenericCsvPropsRow(headerIndex, values) {
-  const playerName = String(
-    headerGet(headerIndex, values, "PLAYER NAME", "PLAYER", "NAME", "FULL NAME") || "",
-  ).trim();
-  if (!playerName) {
-    return null;
-  }
-  return {
-    player_name: playerName,
-    team: String(headerGet(headerIndex, values, "TEAM") || "").trim(),
-    position: String(headerGet(headerIndex, values, "POS", "POSITION") || "").trim(),
-    market: String(headerGet(headerIndex, values, "MARKET", "PROP", "BET TYPE") || "").trim(),
-    line: parseOptionalFloat(headerGet(headerIndex, values, "LINE", "PROP LINE")),
-    over_odds: String(headerGet(headerIndex, values, "OVER ODDS", "OVER", "OVER_ODDS") || "").trim() || undefined,
-    under_odds: String(headerGet(headerIndex, values, "UNDER ODDS", "UNDER", "UNDER_ODDS") || "").trim() || undefined,
-    week: parseOptionalInt(headerGet(headerIndex, values, "WEEK", "WK")),
-    season: parseOptionalInt(headerGet(headerIndex, values, "SEASON", "YEAR")),
-    opponent: String(headerGet(headerIndex, values, "OPPONENT", "OPP") || "").trim() || undefined,
-  };
-}
-
-function scoreUniversalKindFromKeys(keys) {
-  const normalized = keys.map((key) => String(key || "").trim().toLowerCase());
-  const rankings = UNIVERSAL_RANKING_KEYS.filter((key) => normalized.includes(key)).length;
-  const stats = UNIVERSAL_STAT_KEYS.filter((key) => normalized.includes(key)).length;
-  const props = UNIVERSAL_PROP_KEYS.filter((key) => normalized.includes(key)).length;
-  if (props >= 2 && props >= rankings && props >= stats) {
-    return "props";
-  }
-  if (stats >= 2 && stats >= rankings) {
-    return "stats";
-  }
-  return "rankings";
-}
-
-function scoreUniversalKindFromHeaders(headers) {
-  const normalized = headers.map((header) => normalizeUniversalHeader(header));
-  const rankings = ["RK", "RANK", "OVERALL RANK", "TIERS", "TIER", "ADP", "ECR VS. ADP", "POS", "BYE WEEK"].filter(
-    (key) => normalized.includes(key),
-  ).length;
-  const stats = ["SEASON", "WEEK", "FANTASY POINTS", "FPTS", "PASSING YARDS", "RECEIVING YARDS", "RUSHING YARDS"].filter(
-    (key) => normalized.includes(key),
-  ).length;
-  const props = ["MARKET", "LINE", "OVER ODDS", "UNDER ODDS", "SPORTSBOOK"].filter((key) => normalized.includes(key))
-    .length;
-  if (props >= 2 && props >= rankings && props >= stats) {
-    return "props";
-  }
-  if (stats >= 2 && stats >= rankings) {
-    return "stats";
-  }
-  return "rankings";
-}
-
-function detectUniversalKind(rows, headers) {
-  if (headers?.length) {
-    if (isFantasyProsCsv(headers)) {
-      return "rankings";
-    }
-    return scoreUniversalKindFromHeaders(headers);
-  }
-  const sample = rows.slice(0, 5).filter((row) => row && typeof row === "object");
-  if (!sample.length) {
-    throw new Error("No rows found in file");
-  }
-  const scores = { rankings: 0, stats: 0, props: 0 };
-  sample.forEach((row) => {
-    const kind = scoreUniversalKindFromKeys(Object.keys(row));
-    scores[kind] += 1;
-  });
-  if (scores.props >= scores.stats && scores.props >= scores.rankings) {
-    return "props";
-  }
-  if (scores.stats >= scores.rankings) {
-    return "stats";
-  }
-  return "rankings";
-}
-
-function inferUniversalSourceName(filename, kind, rows, meta = {}) {
-  if (meta.source_name) {
-    return String(meta.source_name).trim();
-  }
-  const base = String(filename || "import")
-    .replace(/\.[^.]+$/, "")
-    .toLowerCase();
-  if (base.includes("fantasypros") || base.includes("fantasy_pros")) {
-    return "fantasypros";
-  }
-  if (base.includes("draftkings")) return "draftkings";
-  if (base.includes("fanduel")) return "fanduel";
-  if (base.includes("espn")) return "espn";
-  if (base.includes("sleeper")) return "sleeper";
-  if (base.includes("prop")) return "props_import";
-  if (base.includes("stat")) return "stats_import";
-  if (kind === "props") return "props_import";
-  if (kind === "stats") return "stats_import";
-  const slug = base.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return slug || "import";
-}
-
-function inferUniversalSportsbook(filename, meta = {}) {
-  if (meta.sportsbook) {
-    return String(meta.sportsbook).trim();
-  }
-  const base = String(filename || "").toLowerCase();
-  if (base.includes("draftkings")) return "DraftKings";
-  if (base.includes("fanduel")) return "FanDuel";
-  if (base.includes("caesars")) return "Caesars";
-  if (base.includes("betmgm")) return "BetMGM";
-  return "Imported";
-}
-
-function parseUniversalJson(text) {
-  const parsed = JSON.parse(text);
-  if (Array.isArray(parsed)) {
-    return { rows: parsed, meta: {} };
-  }
-  const rows = parsed.rows;
-  if (!Array.isArray(rows)) {
-    throw new Error("JSON must be an array of rows or an object with a rows array");
-  }
-  return {
-    rows,
-    meta: {
-      source_name: parsed.source_name,
-      sportsbook: parsed.sportsbook,
-    },
-  };
-}
-
-function parseUniversalCsv(text) {
-  const { headers, rows: rawRows } = parseDelimitedDocument(text);
-  if (isFantasyProsCsv(headers)) {
-    const headerIndex = buildHeaderIndex(headers);
-    const rows = rawRows
-      .map((values) => mapFantasyProsCsvRow(headerIndex, values))
-      .filter((row) => row !== null);
-    return { rows, headers, fantasyPros: true };
-  }
-  const headerIndex = buildHeaderIndex(headers);
-  const kind = scoreUniversalKindFromHeaders(headers);
-  const mapper =
-    kind === "props"
-      ? mapGenericCsvPropsRow
-      : kind === "stats"
-        ? mapGenericCsvStatsRow
-        : mapGenericCsvRankingsRow;
-  const rows = rawRows.map((values) => mapper(headerIndex, values)).filter((row) => row !== null);
-  return { rows, headers, kind };
-}
-
-function prepareUniversalImport(file, text) {
-  const format = detectUniversalFileFormat(file, text);
-  if (format === "json") {
-    const { rows, meta } = parseUniversalJson(text);
-    const kind = detectUniversalKind(rows);
-    return {
-      format,
-      kind,
-      rows,
-      source_name: inferUniversalSourceName(file.name, kind, rows, meta),
-      sportsbook: inferUniversalSportsbook(file.name, meta),
-    };
-  }
-  const parsed = parseUniversalCsv(text);
-  const kind = parsed.kind || detectUniversalKind(parsed.rows, parsed.headers);
-  return {
-    format,
-    kind,
-    rows: parsed.rows,
-    source_name: parsed.fantasyPros ? "fantasypros" : inferUniversalSourceName(file.name, kind, parsed.rows),
-    sportsbook: inferUniversalSportsbook(file.name),
-  };
-}
-
-function setUniversalImportStatus(message) {
-  const target = $("#universal-import-status");
-  if (!target) return;
-  target.innerHTML = message ? `<div>${escapeHtml(message)}</div>` : "";
-}
-
-function setUniversalImportResults(html) {
-  const target = $("#universal-import-results");
-  if (!target) return;
-  target.innerHTML = html || "";
-}
-
-async function importUniversalPrepared(prepared) {
-  if (!prepared.rows.length) {
-    throw new Error("No importable rows found");
-  }
-  if (prepared.kind === "rankings") {
-    return api("/api/rankings/import/csv", {
-      method: "POST",
-      body: JSON.stringify({
-        source_name: prepared.source_name,
-        rows: prepared.rows,
-      }),
-    });
-  }
-  if (prepared.kind === "stats") {
-    return api("/api/player-stats/import/json", {
-      method: "POST",
-      body: JSON.stringify({
-        source_name: prepared.source_name,
-        rows: prepared.rows,
-      }),
-    });
-  }
-  return api("/api/player-props/import/json", {
-    method: "POST",
-    body: JSON.stringify({
-      source_name: prepared.source_name,
-      sportsbook: prepared.sportsbook,
-      rows: prepared.rows,
-    }),
-  });
-}
-
-function universalKindLabel(kind) {
-  if (kind === "stats") return "stats / projections";
-  if (kind === "props") return "player props";
-  return "rankings";
-}
-
-async function handleUniversalImportFile(file) {
-  if (!file) return;
-  setUniversalImportResults("");
-  setUniversalImportStatus(`Reading ${file.name}…`);
-  const text = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Could not read file"));
-    reader.readAsText(file);
-  });
-  const prepared = prepareUniversalImport(file, text);
-  setUniversalImportStatus(
-    `Detected ${prepared.format.toUpperCase()} ${universalKindLabel(prepared.kind)} — importing…`,
-  );
-  const result = await importUniversalPrepared(prepared);
-  const message = `Imported ${result.imported_count} ${universalKindLabel(prepared.kind)} from ${prepared.source_name} — Matched: ${result.matched_players}  Created: ${result.created_players}`;
-  setUniversalImportStatus(message);
-  setUniversalImportResults(
-    [
-      `<div><strong>File:</strong> ${escapeHtml(file.name)}</div>`,
-      `<div><strong>Format:</strong> ${escapeHtml(prepared.format.toUpperCase())}</div>`,
-      `<div><strong>Type:</strong> ${escapeHtml(universalKindLabel(prepared.kind))}</div>`,
-      `<div><strong>Source:</strong> ${escapeHtml(prepared.source_name)}</div>`,
-      prepared.kind === "props"
-        ? `<div><strong>Sportsbook:</strong> ${escapeHtml(prepared.sportsbook)}</div>`
-        : "",
-      `<div><strong>Imported:</strong> ${escapeHtml(result.imported_count)}</div>`,
-      `<div><strong>Matched:</strong> ${escapeHtml(result.matched_players)}</div>`,
-      `<div><strong>Created:</strong> ${escapeHtml(result.created_players)}</div>`,
-    ].join(""),
-  );
-  if (prepared.kind === "rankings") {
-    await Promise.all([refreshPlayers(), refreshPlayersSearch(), refreshDraft()]);
-  }
-  toast(message);
-}
-
-function initUniversalImport() {
-  const dropzone = $("#universal-import-dropzone");
-  const input = $("#universal-import-file");
-  if (!dropzone || !input) return;
-
-  const handleFiles = async (files) => {
-    const file = files?.[0];
-    if (!file) return;
-    const lower = file.name.toLowerCase();
-    if (!lower.endsWith(".csv") && !lower.endsWith(".json")) {
-      setUniversalImportStatus("Import failed: Only .csv and .json files are supported.");
-      toast("Only .csv and .json files are supported.");
-      return;
-    }
-    try {
-      await handleUniversalImportFile(file);
-    } catch (error) {
-      const message = `Import failed: ${error.message}`;
-      setUniversalImportStatus(message);
-      setUniversalImportResults("");
-      toast(message);
-    } finally {
-      input.value = "";
-    }
-  };
-
-  dropzone.addEventListener("click", () => input.click());
-  input.addEventListener("change", () => handleFiles(input.files));
-  dropzone.addEventListener("dragover", (event) => {
-    event.preventDefault();
-    dropzone.style.borderColor = "var(--accent, #c9a227)";
-  });
-  dropzone.addEventListener("dragleave", () => {
-    dropzone.style.borderColor = "var(--line)";
-  });
-  dropzone.addEventListener("drop", (event) => {
-    event.preventDefault();
-    dropzone.style.borderColor = "var(--line)";
-    handleFiles(event.dataTransfer?.files);
-  });
-}
-
 function debounce(callback, wait) {
   let timeout;
   return (...args) => {
@@ -1835,34 +1331,6 @@ $("#chat-form").addEventListener("submit", async (event) => {
     addMessage("assistant", error.message);
   }
 });
-
-if ($("#fp-import-btn")) {
-  $("#fp-import-btn").addEventListener("click", async () => {
-    const file = $("#fp-csv-upload")?.files?.[0];
-    if (!file) {
-      toast("Choose a FantasyPros CSV file.");
-      return;
-    }
-    try {
-      await handleUniversalImportFile(file);
-      const status = $("#universal-import-status")?.textContent || "";
-      if ($("#fp-import-status") && status) {
-        $("#fp-import-status").innerHTML = `<div>${escapeHtml(status)}</div>`;
-      }
-    } catch (error) {
-      const message = `Import failed: ${error.message}`;
-      if ($("#fp-import-status")) {
-        $("#fp-import-status").innerHTML = `<div>${escapeHtml(message)}</div>`;
-      }
-      toast(message);
-    } finally {
-      const fpInput = $("#fp-csv-upload");
-      if (fpInput) fpInput.value = "";
-    }
-  });
-}
-
-initUniversalImport();
 
 loadAll().then(() => {
   addMessage("assistant", "Ready. Ask me about the draft board, waiver risers, keepers, weekly matchups, or any player profile.");

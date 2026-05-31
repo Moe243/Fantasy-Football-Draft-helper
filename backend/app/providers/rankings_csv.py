@@ -21,15 +21,13 @@ def import_ranking_rows(conn: sqlite3.Connection, source_name: str, rows: list[d
     run_id = db.start_import_run(conn, clean_source, "rankings_json")
     imported = 0
     skipped = 0
-    failed_rows: list[dict[str, Any]] = []
     created_players = 0
     matched_players = 0
     try:
-        for index, row in enumerate(rows):
+        for row in rows:
             player_name = str(row.get("player_name") or row.get("full_name") or row.get("name") or "").strip()
             if not player_name:
                 skipped += 1
-                failed_rows.append({"row_index": index, "reason": "missing player_name", "row": row})
                 continue
 
             position = normalize_position(str(row.get("position") or ""))
@@ -88,17 +86,13 @@ def import_ranking_rows(conn: sqlite3.Connection, source_name: str, rows: list[d
             )
             imported += 1
         db.finish_import_run(conn, run_id, "success", imported)
-        latest = db.latest_import_run(conn, clean_source, "rankings_json")
         return {
             "source_name": clean_source,
             "status": "success",
             "imported_count": imported,
-            "failed_count": len(failed_rows),
             "skipped_count": skipped,
-            "failed_rows": failed_rows[:50],
             "created_players": created_players,
             "matched_players": matched_players,
-            "last_import": dict(latest) if latest else None,
         }
     except Exception as exc:
         db.finish_import_run(conn, run_id, "error", imported, str(exc))
@@ -110,6 +104,14 @@ def normalize_source_name(source_name: str) -> str:
     if not source:
         raise ValueError("source_name is required")
     return source
+
+
+def resolve_rankings_source_name(source_name: Any) -> str:
+    """Default manual JSON imports when source_name is omitted."""
+    clean = str(source_name or "").strip()
+    if not clean:
+        return "manual_rankings"
+    return normalize_source_name(clean)
 
 
 def make_internal_player_id(
