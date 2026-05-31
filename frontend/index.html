@@ -66,32 +66,6 @@
             <div id="league-draft-board" class="draft-board-grid"></div>
           </section>
 
-          <div id="draft-team-modal" class="draft-team-modal" hidden>
-            <div class="draft-team-modal-backdrop" data-close-draft-team-modal></div>
-            <section class="panel draft-team-modal-panel" role="dialog" aria-modal="true" aria-labelledby="draft-team-modal-title">
-              <div class="panel-head">
-                <div>
-                  <h3 id="draft-team-modal-title">Draft Pick</h3>
-                  <p id="draft-team-modal-subtitle"></p>
-                </div>
-                <button type="button" class="ghost-button" id="draft-team-modal-close" data-close-draft-team-modal>Close</button>
-              </div>
-              <div id="draft-team-modal-error" class="draft-team-modal-error" hidden></div>
-              <div class="draft-team-tabs" role="tablist" aria-label="Position filter">
-                <button type="button" class="ghost-button draft-team-tab active" data-draft-team-tab="ALL">ALL</button>
-                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="QB">QB</button>
-                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="RB">RB</button>
-                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="WR">WR</button>
-                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="TE">TE</button>
-                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="DEF">DEF</button>
-                <button type="button" class="ghost-button draft-team-tab" data-draft-team-tab="K">K</button>
-              </div>
-              <div id="draft-team-modal-body" class="draft-team-modal-body">
-                <div class="compact-row"><span>Loading recommendations…</span></div>
-              </div>
-            </section>
-          </div>
-
           <section class="panel my-picks-panel">
             <div class="panel-head">
               <div>
@@ -444,6 +418,28 @@
 
     <datalist id="player-options"></datalist>
     <div id="toast" role="status" aria-live="polite"></div>
+
+    <div id="draft-pick-panel" class="draft-pick-panel hidden">
+      <div class="draft-pick-panel-header">
+        <div>
+          <h2 id="draft-panel-title">Draft Pick</h2>
+          <span id="draft-panel-subtitle"></span>
+        </div>
+        <button id="draft-panel-close" class="text-button">✕ Close</button>
+      </div>
+      <div class="position-tabs">
+        <button class="pos-tab active" data-pos="ALL">ALL</button>
+        <button class="pos-tab" data-pos="QB">QB</button>
+        <button class="pos-tab" data-pos="RB">RB</button>
+        <button class="pos-tab" data-pos="WR">WR</button>
+        <button class="pos-tab" data-pos="TE">TE</button>
+        <button class="pos-tab" data-pos="DEF">DEF</button>
+        <button class="pos-tab" data-pos="K">K</button>
+      </div>
+      <div id="draft-panel-players" class="draft-panel-players"></div>
+    </div>
+    <div id="draft-panel-overlay" class="draft-panel-overlay hidden"></div>
+
     <script src="/app.js" defer></script>
   </body>
 </html>

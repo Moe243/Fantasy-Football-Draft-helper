@@ -22,11 +22,6 @@ const state = {
   playersSearch: { players: [], total: 0, limit: 50, offset: 0 },
   selectedPlayer: null,
   practiceStatus: null,
-  draftTeamPanel: null,
-  draftTeamRecs: {},
-  draftTeamTab: "ALL",
-  draftTeamLoading: false,
-  draftTeamError: "",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -281,26 +276,14 @@ function draftBoardHtml(boardData) {
     return emptyState("No imported draft board yet. Import your Sleeper league from Setup.");
   }
   const teamCount = Math.max(1, boardData.draft_order?.length || boardData.managers?.length || state.settings?.teams || 10);
-  const order = (boardData.draft_order?.length ? boardData.draft_order : boardData.managers || []).slice(0, teamCount);
-  const headerCells = [];
-  for (let index = 0; index < teamCount; index += 1) {
-    const manager = order[index] || {};
-    const teamName = manager.manager_name || manager.team_name || manager.display_name || `Slot ${index + 1}`;
-    const draftSlot = manager.draft_slot || index + 1;
-    headerCells.push(`
-      <button
-        type="button"
-        class="draft-board-cell header draft-team-header"
-        data-draft-slot="${escapeHtml(draftSlot)}"
-        data-team-name="${escapeHtml(teamName)}"
-        title="Open draft picks for ${escapeHtml(teamName)}"
-      >${escapeHtml(teamName)}</button>
-    `);
-  }
+  const headers = (boardData.draft_order?.length ? boardData.draft_order : boardData.managers || [])
+    .slice(0, teamCount)
+    .map((manager, index) => manager.manager_name || manager.team_name || manager.display_name || `Slot ${index + 1}`);
+  while (headers.length < teamCount) headers.push(`Slot ${headers.length + 1}`);
   const headerRow = `
     <div class="draft-board-row">
       <div class="draft-board-cell header">Round</div>
-      ${headerCells.join("")}
+      ${headers.map((name) => `<div class="draft-board-cell header">${escapeHtml(name)}</div>`).join("")}
     </div>
   `;
   const rows = boardData.board.map((round) => `
@@ -335,242 +318,6 @@ function draftCell(pick) {
     </div>
   `;
 }
-
-
-const DRAFT_TEAM_PANEL_COLUMNS = [
-  { key: "ALL", label: "OVERALL" },
-  { key: "QB", label: "QB" },
-  { key: "RB", label: "RB" },
-  { key: "WR", label: "WR" },
-  { key: "TE", label: "TE" },
-  { key: "DEF_K", label: "DEF/K", positions: ["DEF", "K"] },
-];
-
-function findNextOpenPickForSlot(boardData, draftSlot) {
-  let best = null;
-  for (const row of boardData?.board || []) {
-    for (const pick of row.picks || []) {
-      if (Number(pick.draft_slot) !== Number(draftSlot)) continue;
-      if (pick.player || pick.is_keeper) continue;
-      if (!best || Number(pick.pick_no) < Number(best.pick_no)) best = pick;
-    }
-  }
-  return best;
-}
-
-function pickRoundAndLabel(pick) {
-  if (!pick) return { round: null, pickNo: state.currentPick || 1 };
-  return { round: pick.round, pickNo: pick.pick_no };
-}
-
-async function openDraftTeamPanel(draftSlot, teamName) {
-  const boardData = state.draftBoard || state.practiceStatus?.board;
-  if (!boardData?.board?.length) {
-    toast("Import a league draft board before using draft mode.");
-    return;
-  }
-  const openPick = findNextOpenPickForSlot(boardData, draftSlot);
-  const { round, pickNo } = pickRoundAndLabel(openPick);
-  state.draftTeamPanel = {
-    draftSlot: Number(draftSlot),
-    teamName,
-    round,
-    pickNo: Number(pickNo),
-  };
-  state.draftTeamTab = "ALL";
-  state.draftTeamError = "";
-  const modal = $("#draft-team-modal");
-  if (modal) modal.hidden = false;
-  updateDraftTeamModalHeader();
-  setDraftTeamTabActive("ALL");
-  await loadDraftTeamRecommendations();
-}
-
-function closeDraftTeamPanel() {
-  const modal = $("#draft-team-modal");
-  if (modal) modal.hidden = true;
-  state.draftTeamPanel = null;
-  state.draftTeamRecs = {};
-  state.draftTeamError = "";
-  hideDraftTeamError();
-}
-
-function updateDraftTeamModalHeader() {
-  const panel = state.draftTeamPanel;
-  const title = $("#draft-team-modal-title");
-  const subtitle = $("#draft-team-modal-subtitle");
-  if (!panel || !title) return;
-  title.textContent = `Draft Pick — ${panel.teamName}`;
-  const roundLabel = panel.round ? `Round ${panel.round}` : "Round —";
-  const pickLabel = panel.pickNo ? `Pick ${panel.pickNo}` : "Pick —";
-  if (subtitle) subtitle.textContent = `${roundLabel} · ${pickLabel}`;
-}
-
-function setDraftTeamTabActive(tab) {
-  state.draftTeamTab = tab;
-  $$(".draft-team-tab").forEach((button) => {
-    button.classList.toggle("active", button.dataset.draftTeamTab === tab);
-  });
-}
-
-function hideDraftTeamError() {
-  const error = $("#draft-team-modal-error");
-  if (!error) return;
-  error.hidden = true;
-  error.textContent = "";
-}
-
-function showDraftTeamError(message) {
-  const error = $("#draft-team-modal-error");
-  if (!error) {
-    toast(message);
-    return;
-  }
-  error.hidden = false;
-  error.textContent = message;
-}
-
-async function fetchRecommendationColumn(position, pickNo) {
-  const query = new URLSearchParams({
-    position,
-    limit: "5",
-    current_pick: String(pickNo || state.currentPick || 1),
-  });
-  if (state.leagueId) query.set("league_id", state.leagueId);
-  const payload = await api(`/api/recommendations?${query.toString()}`);
-  return payload.recommendations || [];
-}
-
-async function loadDraftTeamRecommendations() {
-  const panel = state.draftTeamPanel;
-  const body = $("#draft-team-modal-body");
-  if (!panel || !body) return;
-  state.draftTeamLoading = true;
-  state.draftTeamError = "";
-  hideDraftTeamError();
-  body.innerHTML = `<div class="compact-row"><span>Loading recommendations…</span></div>`;
-  try {
-    const pickNo = panel.pickNo;
-    if (state.draftTeamTab === "ALL") {
-      const recs = {};
-      for (const column of DRAFT_TEAM_PANEL_COLUMNS) {
-        if (column.positions) {
-          const merged = [];
-          for (const position of column.positions) {
-            const rows = await fetchRecommendationColumn(position, pickNo);
-            merged.push(...rows);
-          }
-          recs[column.key] = sortRecommendationRows(merged).slice(0, 5);
-        } else {
-          recs[column.key] = await fetchRecommendationColumn(column.key, pickNo);
-        }
-      }
-      state.draftTeamRecs = recs;
-    } else {
-      const rows = await fetchRecommendationColumn(state.draftTeamTab, pickNo);
-      state.draftTeamRecs = { [state.draftTeamTab]: rows };
-    }
-    renderDraftTeamModalBody();
-  } catch (error) {
-    state.draftTeamError = error.message;
-    showDraftTeamError(`Could not load recommendations: ${error.message}`);
-    body.innerHTML = emptyState("Recommendations failed to load.");
-  } finally {
-    state.draftTeamLoading = false;
-  }
-}
-
-function sortRecommendationRows(rows) {
-  return [...rows].sort((left, right) => {
-    const leftRank = left.consensus_rank ?? left.adp ?? left.score ?? 9999;
-    const rightRank = right.consensus_rank ?? right.adp ?? right.score ?? 9999;
-    return Number(leftRank) - Number(rightRank);
-  });
-}
-
-function renderDraftTeamModalBody() {
-  const body = $("#draft-team-modal-body");
-  const panel = state.draftTeamPanel;
-  if (!body || !panel) return;
-  if (state.draftTeamTab === "ALL") {
-    body.innerHTML = `<div class="draft-team-grid">${DRAFT_TEAM_PANEL_COLUMNS.map((column) => `
-      <section class="draft-team-column">
-        <h4>${escapeHtml(column.label)}</h4>
-        ${renderDraftTeamPlayerCards(state.draftTeamRecs[column.key] || [])}
-      </section>
-    `).join("")}</div>`;
-    return;
-  }
-  body.innerHTML = `
-    <section class="draft-team-column draft-team-column-single">
-      <h4>${escapeHtml(state.draftTeamTab)}</h4>
-      ${renderDraftTeamPlayerCards(state.draftTeamRecs[state.draftTeamTab] || [])}
-    </section>
-  `;
-}
-
-function renderDraftTeamPlayerCards(rows) {
-  if (!rows.length) {
-    return emptyState("No available players for this filter.");
-  }
-  return rows.map((row) => {
-    const rank = row.consensus_rank != null ? `Rank #${row.consensus_rank}` : "Rank —";
-    const adp = row.adp != null ? `ADP ${row.adp}` : "ADP —";
-    const label = row.label || "Fair Price";
-    return `
-      <article class="draft-team-player-card">
-        <strong>${escapeHtml(row.player_name || "Unknown")}</strong>
-        <span>${escapeHtml(row.position || "")}${row.team ? ` · ${escapeHtml(row.team)}` : ""}</span>
-        <span>${escapeHtml(rank)} · ${escapeHtml(adp)}</span>
-        <span class="tag fit">${escapeHtml(label)}</span>
-        <button
-          type="button"
-          class="primary-button small-button"
-          data-draft-team-player="${escapeHtml(row.player_id)}"
-          data-draft-team-player-name="${escapeHtml(row.player_name || "Player")}"
-        >Draft</button>
-      </article>
-    `;
-  }).join("");
-}
-
-async function submitDraftTeamPick(playerId, playerName) {
-  const panel = state.draftTeamPanel;
-  if (!panel) return;
-  hideDraftTeamError();
-  if (!state.leagueId) {
-    await api("/api/draft/picks", {
-      method: "POST",
-      body: JSON.stringify({
-        player_id: playerId,
-        pick_no: panel.pickNo,
-        manager: panel.teamName,
-      }),
-    });
-    closeDraftTeamPanel();
-    await refreshDraft();
-    toast(`${playerName} drafted by ${panel.teamName}`);
-    return;
-  }
-  try {
-    const result = await api("/api/draft/pick", {
-      method: "POST",
-      body: JSON.stringify({
-        league_id: state.leagueId,
-        practice_draft_id: state.practiceStatus?.practice?.id || null,
-        player_id: playerId,
-        pick_no: panel.pickNo,
-      }),
-    });
-    closeDraftTeamPanel();
-    applyDraftState(result);
-    await refreshKeepers();
-    toast(`${playerName} drafted by ${panel.teamName}`);
-  } catch (error) {
-    showDraftTeamError(`Draft failed: ${error.message}`);
-  }
-}
-
 
 function renderMyUpcomingPicks() {
   const container = $("#my-upcoming-picks");
@@ -911,24 +658,17 @@ function emptyState(text) {
 
 function findPlayerByName(name) {
   const normalized = normalize(name);
-  const pool = [...state.players, ...(state.playersSearch?.players || [])];
-  return pool.find((player) => normalize(player.name || player.full_name) === normalized)
-    || pool.find((player) => normalize(player.name || player.full_name).includes(normalized));
+  return state.players.find((player) => normalize(player.name || player.full_name) === normalized)
+    || state.players.find((player) => normalize(player.name || player.full_name).includes(normalized));
 }
 
 function normalize(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-async function refreshKeepers() {
-  const keepers = await api("/api/keepers");
-  state.keepers = keepers.keepers || [];
-  renderKeepers();
-}
-
 async function refreshDraft() {
   if (state.leagueId) {
-    await Promise.all([refreshDraftState(), refreshKeepers()]);
+    await refreshDraftState();
     return;
   }
   const [picks, keepers, draft] = await Promise.all([
@@ -996,7 +736,6 @@ function applyDraftState(payload) {
   renderPicks();
   renderDraftOrderMapping();
   renderPracticeStatus();
-  renderKeepers();
 }
 
 async function refreshWaivers() {
@@ -1186,11 +925,6 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  if (target.matches(".draft-team-header")) {
-    await openDraftTeamPanel(target.dataset.draftSlot, target.dataset.teamName);
-    return;
-  }
-
   if (target.id === "refresh-draft") {
     await refreshDraft();
     toast("Draft board refreshed.");
@@ -1345,12 +1079,6 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  const draftTeamPlayer = target.dataset.draftTeamPlayer;
-  if (draftTeamPlayer) {
-    await submitDraftTeamPick(draftTeamPlayer, target.dataset.draftTeamPlayerName || "Player");
-    return;
-  }
-
   const draftPlayer = target.dataset.draftPlayer;
   if (draftPlayer) {
     const leagueId = requireLeagueId();
@@ -1400,41 +1128,23 @@ $("#settings-form").addEventListener("submit", async (event) => {
 $("#keeper-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const player = findPlayerByName($("#keeper-player").value);
-  const teamName = $("#keeper-team").value.trim();
   if (!player) {
     toast("Choose a player from the current player pool.");
     return;
   }
-  if (!teamName) {
-    toast("Enter the keeper team name.");
-    return;
-  }
-  const playerId = player.internal_player_id || player.id;
-  if (!playerId) {
-    toast("Could not resolve a player ID for that keeper.");
-    return;
-  }
-  try {
-    const result = await api("/api/keepers", {
-      method: "POST",
-      body: JSON.stringify({
-        player_id: playerId,
-        player_name: player.full_name || player.name,
-        team_name: teamName,
-        round: $("#keeper-round").value ? Number($("#keeper-round").value) : null,
-        pick_no: $("#keeper-pick").value ? Number($("#keeper-pick").value) : null,
-      }),
-    });
-    event.target.reset();
-    await refreshKeepers();
-    await refreshDraft();
-    await refreshWaivers();
-    const saved = result.keeper || {};
-    const savedName = saved.player?.full_name || saved.player?.name || player.full_name || player.name;
-    toast(`${savedName} saved as keeper for ${teamName}`);
-  } catch (error) {
-    toast(`Keeper save failed: ${error.message}`);
-  }
+  await api("/api/keepers", {
+    method: "POST",
+    body: JSON.stringify({
+      player_id: player.id || player.internal_player_id,
+      team_name: $("#keeper-team").value,
+      round: $("#keeper-round").value || null,
+      pick_no: $("#keeper-pick").value || null,
+    }),
+  });
+  event.target.reset();
+  await refreshDraft();
+  await refreshWaivers();
+  toast("Keeper added.");
 });
 
 $("#pick-form").addEventListener("submit", async (event) => {
@@ -1585,17 +1295,155 @@ $("#chat-form").addEventListener("submit", async (event) => {
   }
 });
 
-const draftTeamModal = $("#draft-team-modal");
-if (draftTeamModal) {
-  draftTeamModal.addEventListener("click", async (event) => {
-    if (event.target.closest("[data-close-draft-team-modal]")) {
-      closeDraftTeamPanel();
-      return;
+// State for the draft panel
+let draftPanelState = {
+  managerId: null,
+  managerName: null,
+  round: null,
+  pickNo: null,
+  activePos: "ALL",
+  players: [],
+};
+
+async function openDraftPanel(managerId, managerName, round, pickNo) {
+  draftPanelState.managerId = managerId;
+  draftPanelState.managerName = managerName;
+  draftPanelState.round = round;
+  draftPanelState.pickNo = pickNo;
+  draftPanelState.activePos = "ALL";
+
+  $("#draft-panel-title").textContent =
+    `Draft Pick — ${managerName}`;
+  $("#draft-panel-subtitle").textContent =
+    round ? `Round ${round}, Pick ${pickNo}` : "";
+
+  document.querySelectorAll(".pos-tab").forEach(tab => {
+    tab.classList.toggle("active", tab.dataset.pos === "ALL");
+  });
+
+  $("#draft-pick-panel").classList.remove("hidden");
+  $("#draft-panel-overlay").classList.remove("hidden");
+
+  await loadDraftPanelPlayers("ALL");
+}
+
+function closeDraftPanel() {
+  $("#draft-pick-panel").classList.add("hidden");
+  $("#draft-panel-overlay").classList.add("hidden");
+}
+
+async function loadDraftPanelPlayers(position) {
+  draftPanelState.activePos = position;
+  const container = $("#draft-panel-players");
+  container.innerHTML = "<p>Loading...</p>";
+
+  try {
+    const pos = position === "ALL" ? "" : `&position=${position}`;
+    const result = await api(
+      `/api/draft/recommendations?limit=10${pos}&` +
+      draftQueryString()
+    );
+    const players = result.recommendations || result.players || [];
+    draftPanelState.players = players;
+    renderDraftPanelPlayers(players);
+  } catch (e) {
+    container.innerHTML = `<p>Could not load players: ${e.message}</p>`;
+  }
+}
+
+function renderDraftPanelPlayers(players) {
+  const container = $("#draft-panel-players");
+  if (!players.length) {
+    container.innerHTML = "<p>No players available.</p>";
+    return;
+  }
+  container.innerHTML = players.slice(0, 10).map(p => {
+    const nested = p.player || {};
+    const name = p.player_name || nested.full_name || nested.name || p.full_name || p.name || "Unknown";
+    const team = p.team || nested.team || "";
+    const pos = p.position || nested.position || "";
+    const consensus = p.consensus || {};
+    const rank = p.consensus_rank || consensus.consensus_rank
+      ? `Consensus #${p.consensus_rank || consensus.consensus_rank}`
+      : p.overall_rank
+      ? `Rank #${p.overall_rank}`
+      : consensus.sleeper_adp || p.adp
+      ? `ADP ${consensus.sleeper_adp || p.adp}`
+      : "";
+    const label = p.label || consensus.label || p.fit || "";
+    const pid = p.player_id || nested.internal_player_id || nested.id || p.id || p.internal_player_id || "";
+    return `
+      <div class="draft-panel-card">
+        <div class="player-name">${escapeHtml(name)}</div>
+        <div class="player-meta">${escapeHtml(pos)} · ${escapeHtml(team)}</div>
+        ${rank ? `<div class="player-meta">${escapeHtml(rank)}</div>` : ""}
+        ${label ? `<div class="player-meta">${escapeHtml(label)}</div>` : ""}
+        <button class="draft-btn"
+          data-panel-draft-player="${escapeHtml(pid)}"
+          data-panel-draft-name="${escapeHtml(name)}">
+          Draft
+        </button>
+      </div>`;
+  }).join("");
+}
+
+if ($("#draft-panel-close")) {
+  $("#draft-panel-close").addEventListener("click", closeDraftPanel);
+}
+if ($("#draft-panel-overlay")) {
+  $("#draft-panel-overlay").addEventListener("click", closeDraftPanel);
+}
+
+document.querySelectorAll(".pos-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".pos-tab").forEach(t =>
+      t.classList.remove("active"));
+    tab.classList.add("active");
+    loadDraftPanelPlayers(tab.dataset.pos);
+  });
+});
+
+if ($("#draft-panel-players")) {
+  $("#draft-panel-players").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-panel-draft-player]");
+    if (!btn) return;
+    const playerId = btn.dataset.panelDraftPlayer;
+    const playerName = btn.dataset.panelDraftName;
+    if (!playerId) return;
+
+    try {
+      await api("/api/draft/picks", {
+        method: "POST",
+        body: JSON.stringify({
+          player_id: playerId,
+          manager: draftPanelState.managerId,
+          round: draftPanelState.round,
+          pick_no: draftPanelState.pickNo,
+        }),
+      });
+      toast(`${playerName} drafted by ${draftPanelState.managerName}`);
+      closeDraftPanel();
+      await refreshDraft();
+    } catch (e) {
+      const msg = $("#draft-panel-players").querySelector(".error-msg");
+      if (msg) msg.textContent = `Draft failed: ${e.message}`;
+      else toast(`Draft failed: ${e.message}`);
     }
-    const tab = event.target.closest("[data-draft-team-tab]");
-    if (!tab || state.draftTeamLoading) return;
-    setDraftTeamTabActive(tab.dataset.draftTeamTab);
-    await loadDraftTeamRecommendations();
+  });
+}
+
+if ($("#league-draft-board")) {
+  $("#league-draft-board").addEventListener("click", (event) => {
+    const header = event.target.closest("[data-open-draft-panel]");
+    if (!header) return;
+    const round = header.dataset.draftRound ? Number(header.dataset.draftRound) : null;
+    const pickNo = header.dataset.draftPickNo ? Number(header.dataset.draftPickNo) : null;
+    openDraftPanel(
+      header.dataset.openDraftPanel,
+      header.dataset.managerName,
+      round,
+      pickNo,
+    );
   });
 }
 

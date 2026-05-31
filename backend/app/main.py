@@ -23,13 +23,7 @@ from .services.consensus import get_consensus_for_player, get_consensus_rows
 from .services.data_imports import import_prop_rows, import_stat_rows
 from .services.draft_board import get_draft_board
 from .services.draft_history import draft_history_summary
-from .services.draft_room import (
-    board_to_draft_picks,
-    first_open_pick,
-    get_draft_state,
-    make_draft_pick,
-    remove_draft_pick,
-)
+from .services.draft_room import get_draft_state, make_draft_pick, remove_draft_pick
 from .services.league_import import draft_mapping_for_league, set_my_team, update_draft_slots
 from .services.player_detail import player_detail, search_players
 from .services.practice_draft import (
@@ -45,7 +39,6 @@ from .services.recommendations import (
     current_pick_number,
     database_draft_recommendations,
     draft_recommendations,
-    recommendation_api_rows,
     waiver_risers,
 )
 from .services.sleeper_import import import_sleeper_players
@@ -198,22 +191,12 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 payload = self.read_json()
                 keeper = Keeper(
                     player_id=require(payload, "player_id"),
-                    team_name=str(
-                        payload.get("team_name")
-                        or payload.get("manager_id")
-                        or "Unknown team"
-                    ),
+                    team_name=str(payload.get("team_name") or "Unknown team"),
                     round=optional_int(payload.get("round")),
                     pick_no=optional_int(payload.get("pick_no")),
                 )
-                validate_player_id(conn, keeper.player_id)
                 db.upsert_keeper(conn, keeper)
-                saved = enrich_keeper(conn, keeper)
-                return {
-                    "ok": True,
-                    "keeper": saved,
-                    "keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)],
-                }
+                return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
             if method == "DELETE":
                 player_id = first(query, "player_id")
                 team_name = first(query, "team_name")
@@ -244,34 +227,6 @@ class FantasyHandler(BaseHTTPRequestHandler):
                 else:
                     db.clear_draft_picks(conn)
                 return {"picks": [enrich_pick(conn, item) for item in db.get_draft_picks(conn)]}
-
-
-        if method == "GET" and path == "/api/recommendations":
-            limit = int(first(query, "limit") or "5")
-            position = first(query, "position") or "ALL"
-            league_id = first(query, "league_id")
-            board_picks = picks
-            current_pick = int(first(query, "current_pick") or current_pick_number(picks, keepers))
-            if league_id:
-                board_data = get_draft_board(conn, league_id)
-                board_picks = board_to_draft_picks(board_data)
-                if not first(query, "current_pick"):
-                    current_pick = first_open_pick(board_data)
-            rows = recommendation_api_rows(
-                conn,
-                settings_record,
-                keepers,
-                board_picks,
-                position=position,
-                limit=limit,
-                current_pick=current_pick,
-            )
-            return {
-                "ok": True,
-                "position": position,
-                "current_pick": current_pick,
-                "recommendations": rows,
-            }
 
         if method == "GET" and path == "/api/draft/recommendations":
             limit = int(first(query, "limit") or "12")
