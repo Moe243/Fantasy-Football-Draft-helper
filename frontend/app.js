@@ -1137,11 +1137,12 @@ $("#keeper-form").addEventListener("submit", async (event) => {
     body: JSON.stringify({
       player_id: player.id || player.internal_player_id,
       team_name: $("#keeper-team").value,
-      round: $("#keeper-round").value || null,
+      round: Number($("#keeper-round").value) || 15,
       pick_no: $("#keeper-pick").value || null,
     }),
   });
   event.target.reset();
+  if ($("#keeper-round")) $("#keeper-round").value = "15";
   await refreshDraft();
   await refreshWaivers();
   toast("Keeper added.");

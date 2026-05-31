@@ -36,6 +36,8 @@ class Keeper:
     team_name: str
     round: int | None = None
     pick_no: int | None = None
+    league_id: str | None = None
+    roster_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

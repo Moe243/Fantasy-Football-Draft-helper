@@ -195,7 +195,6 @@ class FantasyHandler(BaseHTTPRequestHandler):
                     round=optional_int(payload.get("round")),
                     pick_no=optional_int(payload.get("pick_no")),
                 )
-                validate_player_id(conn, keeper.player_id)
                 db.upsert_keeper(conn, keeper)
                 return {"keepers": [enrich_keeper(conn, item) for item in db.get_keepers(conn)]}
             if method == "DELETE":

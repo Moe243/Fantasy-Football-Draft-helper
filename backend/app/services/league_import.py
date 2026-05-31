@@ -532,7 +532,7 @@ def update_draft_slots(conn: sqlite3.Connection, league_id: str, slots: list[dic
                 "sleeper_user_id": sleeper_user_id or manager.get("sleeper_user_id"),
                 "display_name": manager.get("display_name") or item.get("display_name") or f"Slot {draft_slot}",
                 "team_name": manager.get("team_name") or item.get("team_name") or manager.get("display_name") or f"Slot {draft_slot}",
-                "manager_name": manager.get("team_name") or item.get("team_name") or manager.get("display_name") or f"Slot {draft_slot}",
+                "manager_name": manager_team_label({**manager, **item, "draft_slot": draft_slot}),
                 "avatar": manager.get("avatar"),
                 "source": "manual",
             }
@@ -825,3 +825,93 @@ def league_summary(league: dict[str, Any]) -> dict[str, Any]:
         "total_rosters": league.get("total_rosters"),
         "previous_league_id": league.get("previous_league_id"),
     }
+
+def manager_team_label(row: dict[str, Any]) -> str:
+    return (
+        row.get("local_team_name")
+        or row.get("team_name")
+        or row.get("local_display_name")
+        or row.get("display_name")
+        or f"Roster {row.get('roster_id')}"
+    )
+
+
+def manager_display_label(row: dict[str, Any]) -> str:
+    return row.get("local_display_name") or row.get("display_name") or manager_team_label(row)
+
+
+def list_managers_for_setup(conn: sqlite3.Connection, league_id: str) -> list[dict[str, Any]]:
+    draft = latest_draft_for_league(conn, league_id)
+    draft_id = draft["draft_id"] if draft else None
+    rows = conn.execute(
+        """
+        SELECT lm.*, ds.draft_slot
+        FROM league_managers lm
+        LEFT JOIN draft_slots ds
+            ON ds.league_id = lm.league_id
+            AND ds.roster_id = lm.roster_id
+            AND (ds.draft_id = ? OR ds.draft_id IS NULL)
+        WHERE lm.league_id = ?
+        ORDER BY COALESCE(ds.draft_slot, 9999), lm.id
+        """,
+        (draft_id, league_id),
+    ).fetchall()
+    managers: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["sleeper_display_name"] = item.get("display_name")
+        item["sleeper_team_name"] = item.get("team_name")
+        item["custom_manager_name"] = item.get("local_display_name")
+        item["custom_team_name"] = item.get("local_team_name")
+        item["manager_name"] = manager_team_label(item)
+        managers.append(item)
+    return managers
+
+
+def update_manager_display_names(
+    conn: sqlite3.Connection,
+    league_id: str,
+    roster_id: int,
+    *,
+    local_display_name: str | None = None,
+    local_team_name: str | None = None,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM league_managers WHERE league_id = ? AND roster_id = ?",
+        (league_id, roster_id),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Unknown roster_id {roster_id} for league {league_id}")
+    conn.execute(
+        """
+        UPDATE league_managers
+        SET local_display_name = ?, local_team_name = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE league_id = ? AND roster_id = ?
+        """,
+        (local_display_name, local_team_name, league_id, roster_id),
+    )
+    updated = dict(row)
+    updated["local_display_name"] = local_display_name
+    updated["local_team_name"] = local_team_name
+    label = manager_team_label(updated)
+    conn.execute(
+        """
+        UPDATE draft_slots
+        SET manager_name = ?
+        WHERE league_id = ? AND roster_id = ?
+        """,
+        (label, league_id, roster_id),
+    )
+    conn.commit()
+    return {"managers": list_managers_for_setup(conn, league_id)}
+
+
+def reset_manager_display_names(conn: sqlite3.Connection, league_id: str, roster_id: int) -> dict[str, Any]:
+    return update_manager_display_names(
+        conn,
+        league_id,
+        roster_id,
+        local_display_name=None,
+        local_team_name=None,
+    )
+

@@ -9,6 +9,7 @@ from typing import Any
 from .. import db
 from .consensus import get_consensus_for_player
 from .props_analysis import analyze_props
+from .source_comparison import build_source_comparison
 
 
 def search_players(
@@ -80,10 +81,12 @@ def player_detail(conn: sqlite3.Connection, player_id: str) -> dict[str, Any]:
     props = props_for_player(conn, player_id)
     news = news_for_player(conn, player_id)
     notes = insight_notes(consensus, rankings, props, player)
+    consensus_data = consensus["consensus"] if consensus else None
     return {
         "player": player,
         "rankings": rankings,
-        "consensus": consensus["consensus"] if consensus else None,
+        "consensus": consensus_data,
+        "source_comparison": build_source_comparison(consensus_data, rankings, stats),
         "stats": stats,
         "props": props,
         "props_analysis": analyze_props(props),

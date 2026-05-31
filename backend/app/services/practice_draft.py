@@ -62,9 +62,15 @@ def make_pick_at(
     draft = active_practice_by_id(conn, league_id, practice_draft_id) if practice_draft_id else require_active(conn, league_id)
     if draft is None:
         raise ValueError("Could not find practice draft")
-    if player_id in practice_drafted_player_ids(conn, int(draft["id"])):
-        raise ValueError("That player has already been selected in this practice draft")
     target_pick = int(pick_no or draft["current_pick"] or 1)
+    existing_row = conn.execute(
+        "SELECT player_id FROM practice_draft_picks WHERE practice_draft_id = ? AND pick_no = ?",
+        (draft["id"], target_pick),
+    ).fetchone()
+    existing_id = existing_row["player_id"] if existing_row else None
+    unavailable = practice_drafted_player_ids(conn, int(draft["id"]))
+    if player_id in unavailable and player_id != existing_id:
+        raise ValueError("That player has already been selected in this practice draft")
     pick_context = pick_context_for(conn, league_id, target_pick)
     insert_practice_pick(conn, draft["id"], pick_context, player_id, source)
     recalculate_current_pick(conn, league_id, int(draft["id"]))

@@ -106,6 +106,14 @@ def normalize_source_name(source_name: str) -> str:
     return source
 
 
+def resolve_rankings_source_name(source_name: Any) -> str:
+    """Default manual JSON imports when source_name is omitted."""
+    clean = str(source_name or "").strip()
+    if not clean:
+        return "manual_rankings"
+    return normalize_source_name(clean)
+
+
 def make_internal_player_id(
     source_name: str,
     player_name: str,

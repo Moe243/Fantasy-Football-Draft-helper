@@ -1,0 +1,32 @@
+[
+  {
+    "player_name": "J.K. Dobbins",
+    "team": "DEN",
+    "position": "RB",
+    "season": 2025,
+    "week": 1,
+    "stat_type": "actual",
+    "rushing_attempts": 14,
+    "rushing_yards": 68,
+    "rushing_tds": 1,
+    "targets": 3,
+    "receptions": 2,
+    "receiving_yards": 18,
+    "fantasy_points": 16.6
+  },
+  {
+    "player_name": "J.K. Dobbins",
+    "team": "DEN",
+    "position": "RB",
+    "season": 2025,
+    "week": 2,
+    "stat_type": "projected",
+    "rushing_attempts": 12,
+    "rushing_yards": 55,
+    "rushing_tds": 0,
+    "targets": 3,
+    "receptions": 2,
+    "receiving_yards": 15,
+    "fantasy_points": 10.5
+  }
+]

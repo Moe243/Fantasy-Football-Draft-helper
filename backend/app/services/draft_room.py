@@ -222,6 +222,13 @@ def find_pick_cell(board_data: dict[str, Any], pick_no: int) -> dict[str, Any] |
     return None
 
 
+def player_id_on_cell(cell: dict[str, Any] | None) -> str | None:
+    if not cell:
+        return None
+    player = cell.get("player") or {}
+    return player.get("internal_player_id") or player.get("id")
+
+
 def mark_current_pick(board_data: dict[str, Any], current_pick: int) -> dict[str, Any] | None:
     current_cell = None
     for row in board_data.get("board") or []:
