@@ -708,7 +708,15 @@ function normalize(value) {
 
 async function refreshDraft() {
   if (state.leagueId) {
-    await refreshDraftState();
+    const [picks, keepers] = await Promise.all([
+      api("/api/draft/picks"),
+      api("/api/keepers"),
+      refreshDraftState(),
+    ]);
+    state.picks = picks.picks;
+    state.keepers = keepers.keepers;
+    renderPicks();
+    renderKeepers();
     return;
   }
   const [picks, keepers, draft] = await Promise.all([

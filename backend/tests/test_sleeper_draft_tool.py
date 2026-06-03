@@ -5,6 +5,7 @@ from backend.app import db
 from backend.app.providers.draftkings import DraftKingsClient
 from backend.app.providers.http import ProviderError
 from backend.app.providers.rankings_csv import import_ranking_rows
+from backend.app.models import Keeper
 from backend.app.services import startup
 from backend.app.services.availability import estimate_availability
 from backend.app.services.data_imports import import_prop_rows, import_stat_rows
@@ -14,7 +15,7 @@ from backend.app.services.draft_room import get_draft_state, make_draft_pick, re
 from backend.app.services.league_import import build_draft_slot_mapping, import_sleeper_league, set_my_team, update_draft_slots
 from backend.app.services.player_detail import player_detail, search_players
 from backend.app.services.pick_ownership import calculate_pick_ownership, snake_draft_slot
-from backend.app.services.practice_draft import simulate_next, simulate_to_my_next_pick, start_practice
+from backend.app.services.practice_draft import make_pick_at, make_user_pick, simulate_next, simulate_to_my_next_pick, start_practice
 from backend.app.services.props_analysis import analyze_props
 from backend.app.services.sleeper_import import import_sleeper_players
 
@@ -359,6 +360,29 @@ class SleeperDraftToolTests(unittest.TestCase):
         removed = remove_draft_pick(conn, "L1", 1)
         self.assertEqual(removed["current_pick"], 1)
         self.assertIsNone(removed["board"][0]["picks"][0]["player"])
+
+    def test_practice_pick_routes_reject_unavailable_players_and_filled_picks(self):
+        conn = memory_db()
+        seed_players(conn)
+        seed_rankings(conn)
+        import_sleeper_league(conn, "L1", client=FakeSleeperClient(picks=[]))
+        set_my_team(conn, "L1", 2)
+        started = start_practice(conn, "L1")
+        practice_id = int(started["practice"]["id"])
+
+        db.upsert_keeper(conn, Keeper(player_id="sleeper_111", team_name="Alpha", round=1, pick_no=1))
+        with self.assertRaisesRegex(ValueError, "already been drafted or kept"):
+            make_user_pick(conn, "L1", "sleeper_111")
+
+        made = make_pick_at(conn, "L1", "sleeper_222", pick_no=1, practice_draft_id=practice_id)
+        self.assertEqual(made["practice"]["current_pick"], 2)
+        with self.assertRaisesRegex(ValueError, "already has a player"):
+            make_pick_at(conn, "L1", "sleeper_333", pick_no=1, practice_draft_id=practice_id)
+
+        state_payload = get_draft_state(conn, "L1")
+        available_ids = {item["player"]["internal_player_id"] for item in state_payload["best_available"]}
+        self.assertNotIn("sleeper_111", available_ids)
+        self.assertNotIn("sleeper_222", available_ids)
 
     def test_mock_draft_state_metadata_and_simulate_guard(self):
         conn = memory_db()

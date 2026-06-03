@@ -43,8 +43,7 @@ def get_current_practice(conn: sqlite3.Connection, league_id: str) -> dict[str, 
 
 def make_user_pick(conn: sqlite3.Connection, league_id: str, player_id: str) -> dict[str, Any]:
     draft = require_active(conn, league_id)
-    if player_id in practice_drafted_player_ids(conn, int(draft["id"])):
-        raise ValueError("That player has already been selected in this practice draft")
+    validate_practice_player_available(conn, league_id, int(draft["id"]), player_id)
     pick_context = pick_context_for(conn, league_id, int(draft["current_pick"]))
     insert_practice_pick(conn, draft["id"], pick_context, player_id, "user")
     recalculate_current_pick(conn, league_id, int(draft["id"]))
@@ -62,9 +61,10 @@ def make_pick_at(
     draft = active_practice_by_id(conn, league_id, practice_draft_id) if practice_draft_id else require_active(conn, league_id)
     if draft is None:
         raise ValueError("Could not find practice draft")
-    if player_id in practice_drafted_player_ids(conn, int(draft["id"])):
-        raise ValueError("That player has already been selected in this practice draft")
+    validate_practice_player_available(conn, league_id, int(draft["id"]), player_id)
     target_pick = int(pick_no or draft["current_pick"] or 1)
+    if practice_pick_exists(conn, int(draft["id"]), target_pick):
+        raise ValueError(f"Pick {target_pick} already has a player")
     pick_context = pick_context_for(conn, league_id, target_pick)
     insert_practice_pick(conn, draft["id"], pick_context, player_id, source)
     recalculate_current_pick(conn, league_id, int(draft["id"]))
@@ -216,6 +216,28 @@ def practice_drafted_player_ids(conn: sqlite3.Connection, practice_draft_id: int
         (practice_draft_id,),
     ).fetchall()
     return {row["player_id"] for row in rows}
+
+
+def validate_practice_player_available(
+    conn: sqlite3.Connection,
+    league_id: str,
+    practice_draft_id: int,
+    player_id: str,
+) -> None:
+    if player_id in drafted_player_ids(conn, league_id) or player_id in practice_drafted_player_ids(conn, practice_draft_id):
+        raise ValueError("That player has already been drafted or kept")
+
+
+def practice_pick_exists(conn: sqlite3.Connection, practice_draft_id: int, pick_no: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM practice_draft_picks
+        WHERE practice_draft_id = ? AND pick_no = ? AND player_id IS NOT NULL
+        """,
+        (practice_draft_id, pick_no),
+    ).fetchone()
+    return row is not None
 
 
 def overlay_practice_picks(conn: sqlite3.Connection, board: dict[str, Any], picks: list[dict[str, Any]]) -> None:

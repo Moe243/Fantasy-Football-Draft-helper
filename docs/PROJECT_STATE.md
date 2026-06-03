@@ -30,6 +30,15 @@ Do not rebuild the app from scratch. Prefer small, focused changes.
 - Waivers tab uses enriched Sleeper trending data when available.
 - Chat tab is a simple route-backed assistant, not a full LLM tool layer yet.
 
+## Latest Checkpoint
+
+Phase 1 draft-room stability has started:
+
+- Practice picks now use the same unavailable-player rule as the central draft room for keepers, live picks, and active practice picks.
+- Manual practice pick insertion cannot overwrite an already-filled practice pick.
+- League-mode refresh now also refreshes manual keepers and manual draft-pick side panels, so those panels do not go stale while the board uses `/api/draft/state`.
+- Regression tests cover unavailable practice picks, filled practice picks, current-pick advancement, and Best Available exclusions.
+
 ## Important Current League Facts
 
 Local database currently contains the imported Sleeper league:
